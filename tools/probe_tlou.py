@@ -224,6 +224,9 @@ def main():
     msys = Path(os.environ.get("MSYS2_ROOT", "C:/msys64"))
     env["PATH"] = str(msys / "clang64/bin") + os.pathsep + env.get("PATH", "")
     env["GOW3_GPU_USER_DIR"] = str(user)
+    xbox_atlas = ROOT / "tools" / "defaults" / "tlou-xbox-atlas.rgba"
+    if xbox_atlas.is_file():
+        env.setdefault("GOW3_PROMPTS_ATLAS", str(xbox_atlas))
     # The shader cache: analysis/tlou-user/cache or, when that is a link (a junction to an SSD,
     # README), the folder it points to.
     cache = user / "cache"
