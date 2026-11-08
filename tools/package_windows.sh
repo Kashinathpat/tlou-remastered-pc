@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds dist/TLOU-Remastered-windows/ and dist/TLOU-Remastered-windows.zip: a folder that runs on a
 # Windows 10/11 x64 PC with a Vulkan GPU, without Python or MSYS2 installed.
-#   TLOU Launcher.exe    starter (launcher/tlou-launcher.c) -> python\pythonw.exe launcher\...
+#   TLOU Launcher.exe    opens the settings launcher
+#   TLOU Game.exe        starts the game using the launcher's saved settings
 #   python\              Windows Python with Tkinter and Pillow (tools/copy_python.py)
 #   launcher\ tools\     the launcher and the start script (tools/probe_tlou.py)
 #   gow3_pc\scripts\     the preparation scripts; gow3_pc\out\ the runtime and its DLLs
@@ -39,11 +40,13 @@ done
 cp -r gow3_pc/out/pydeps/iced_x86 gow3_pc/out/pydeps/iced_x86-*.dist-info "$stage/gow3_pc/out/pydeps/"
 rm -rf -- "$stage/gow3_pc/out/pydeps/iced_x86/__pycache__"   # (paths of this machine)
 cp gow3_pc/scripts/*.py "$stage/gow3_pc/scripts/"
-cp tools/probe_tlou.py "$stage/tools/"
+cp tools/probe_tlou.py tools/run_game.py "$stage/tools/"
 cp launcher/tlou_launcher.pyw "$stage/launcher/"
 # The starter, without the icon: the icon is the game's cover.
 clang -O2 -Wall -Wextra -Werror -static -municode -mwindows launcher/tlou-launcher.c \
     -o "$stage/TLOU Launcher.exe"
+clang -O2 -Wall -Wextra -Werror -static -municode -mwindows launcher/tlou-game.c \
+    -o "$stage/TLOU Game.exe"
 cp tools/VERSION "$stage/VERSION"
 cp gow3_pc/packaging/windows/README-player.txt "$stage/README.txt"
 cp gow3_pc/LICENSE "$stage/LICENSE.txt"

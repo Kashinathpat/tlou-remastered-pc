@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -36,8 +36,14 @@ DEFAULT_SWITCHES = {"motion_blur": False, "job_sleep": True, "profile": False, "
 DEFAULT_LANGUAGE = "en"
 # What Start-TLOU-Profile.cmd sets, for the "profiler" switch.
 PROFILE_ENV = {"GOW3_PROFILE": "10", "GOW3_THREAD_IDS": "1", "GOW3_COMPUTE_WAIT_STATS": "1",
-               "GOW3_FAULT_STATS": "1", "GOW3_FAULT_TIMES": "1", "GOW3_PROFILE_GUEST": "NdJobWorkerThread",
-               "GOW3_SHARE_CHECK": "1", "GOW3_DUMP_DIR": str(ROOT / "analysis/tlou/profile-user")}
+               "GOW3_FAULT_STATS": "1", "GOW3_FAULT_TIMES": "1",
+               "GOW3_PROFILE_GUEST": "main,NdJobWorkerThread",
+               "GOW3_SHARE_CHECK": "1", "GOW3_PROFILE_STALLS": "1",
+               # Checkpoints only: the device fault report itself caused device loss at the TLOU menu.
+               "GOW3_GPU_CHECKPOINTS": "4",
+               # Keep buffer ranges for the dispatches immediately around the water/pallet loss.
+               "GOW3_TRACE_DISPATCH": "82c46b8b,e44070db,106beafd,15d34dcb,951b339e",
+               "GOW3_DUMP_DIR": str(ROOT / "analysis/tlou/profile-user")}
 
 # Debug menu. Live: optimizations the game re-reads every 250 ms (gow3_toggles.h, a bit set in the
 # file switches one off). The file lasts one run: probe_tlou.py deletes it at the start.
@@ -77,6 +83,7 @@ STARTUP = [
         ("Pipeline de draws", "GOW3_DRAW_PIPE", "1", "0", True),
         ("Gravação Vulkan em thread própria", "GOW3_VK_RECORD_THREAD", "1", "0", True),
         ("Prioridade alta nas threads da GPU", "GOW3_GPU_THREAD_PRIORITY", "above", "normal", True),
+        ("Prioridades das threads do jogo", "GOW3_GUEST_PRIORITY", "1", "0", True),
         ("Quadros em andamento", "GOW3_FRAMES_IN_FLIGHT", "1", "0", True),
         ("Menos esperas entre estágios", "GOW3_FEWER_DRAINS", "1", "0", True),
         ("Busca de dados sem bloquear", "GOW3_FETCH_NO_BLOCK", "1", "0", True),
@@ -1044,6 +1051,39 @@ TEXT_TABLE = {
            "シェーダーをバックグラウンドでコンパイル", "操作設定", "PS4 Proの影(高解像度)"],
 }
 TEXTS = {code: dict(zip(KEYS, values)) for code, values in TEXT_TABLE.items()}
+# The shader cache's "Clear" button (Folders window).
+CLEAR_KEYS = "clear_cache clear_confirm clear_done clear_empty clear_running clear_failed".split()
+CLEAR_TABLE = {
+    "pt": ["Limpar", "Mover o cache de shaders para a Lixeira? O jogo compila os shaders de novo e terá pausas curtas até terminar.",
+           "Cache movido para a Lixeira.", "O cache já está vazio.", "Feche o jogo antes de limpar o cache.",
+           "Não foi possível mover o cache para a Lixeira."],
+    "en": ["Clear", "Move the shader cache to the Recycle Bin? The game compiles its shaders again, with short pauses until it is done.",
+           "Cache moved to the Recycle Bin.", "The cache is already empty.", "Close the game before clearing the cache.",
+           "The cache could not be moved to the Recycle Bin."],
+    "es": ["Borrar", "¿Mover la caché de shaders a la Papelera? El juego vuelve a compilar los shaders, con pausas cortas hasta terminar.",
+           "Caché movida a la Papelera.", "La caché ya está vacía.", "Cierra el juego antes de borrar la caché.",
+           "No se pudo mover la caché a la Papelera."],
+    "fr": ["Vider", "Mettre le cache des shaders à la Corbeille ? Le jeu recompile ses shaders, avec de courtes pauses jusqu'à la fin.",
+           "Cache mis à la Corbeille.", "Le cache est déjà vide.", "Fermez le jeu avant de vider le cache.",
+           "Le cache n'a pas pu être mis à la Corbeille."],
+    "de": ["Leeren", "Den Shader-Cache in den Papierkorb verschieben? Das Spiel kompiliert die Shader neu, mit kurzen Pausen bis es fertig ist.",
+           "Cache in den Papierkorb verschoben.", "Der Cache ist bereits leer.", "Schließe das Spiel, bevor du den Cache leerst.",
+           "Der Cache konnte nicht in den Papierkorb verschoben werden."],
+    "it": ["Svuota", "Spostare la cache degli shader nel Cestino? Il gioco ricompila gli shader, con brevi pause finché non ha finito.",
+           "Cache spostata nel Cestino.", "La cache è già vuota.", "Chiudi il gioco prima di svuotare la cache.",
+           "Impossibile spostare la cache nel Cestino."],
+    "pl": ["Wyczyść", "Przenieść pamięć podręczną shaderów do Kosza? Gra skompiluje shadery od nowa, z krótkimi przerwami do końca.",
+           "Pamięć podręczna przeniesiona do Kosza.", "Pamięć podręczna jest już pusta.", "Zamknij grę przed czyszczeniem pamięci podręcznej.",
+           "Nie udało się przenieść pamięci podręcznej do Kosza."],
+    "ru": ["Очистить", "Переместить кэш шейдеров в Корзину? Игра заново скомпилирует шейдеры, с короткими паузами, пока не закончит.",
+           "Кэш перемещён в Корзину.", "Кэш уже пуст.", "Закройте игру перед очисткой кэша.",
+           "Не удалось переместить кэш в Корзину."],
+    "ja": ["消去", "シェーダーキャッシュをごみ箱に移動しますか?ゲームはシェーダーを再コンパイルし、終わるまで短い停止が起きます。",
+           "キャッシュをごみ箱に移動しました。", "キャッシュはすでに空です。", "キャッシュを消去する前にゲームを閉じてください。",
+           "キャッシュをごみ箱に移動できませんでした。"],
+}
+for _code, _values in CLEAR_TABLE.items():
+    TEXTS[_code].update(zip(CLEAR_KEYS, _values))
 
 BG, PANEL, TEXT, MUTED, ACCENT, ACCENT_HOT = "#090909", "#141414", "#ece9e2", "#8f8f88", "#c8862a", "#e4a23f"
 DISABLED, ERROR = "#2b2b2b", "#e06c5a"
@@ -1217,6 +1257,9 @@ def starter_exe():
     """TLOU Launcher.exe: at the top of a package, beside this file in the repository."""
     return next((p for p in (ROOT / "TLOU Launcher.exe", HERE / "TLOU Launcher.exe") if p.is_file()), None)
 
+def game_exe():
+    """TLOU Game.exe: at the top of a package, beside this file in the repository."""
+    return next((p for p in (ROOT / "TLOU Game.exe", HERE / "TLOU Game.exe") if p.is_file()), None)
 
 def make_game_ico(game, destination):
     """The dump's icon as an .ico for the shortcut; False without the picture or Pillow."""
@@ -1246,11 +1289,13 @@ def make_shortcut(link, target, icon):
 
 def game_shortcut(game):
     """In a package, whose exe has no icon: a shortcut beside it with the icon of the player's game."""
-    exe = starter_exe()
-    if exe is None or ICON.is_file():
+    launcher_exe = starter_exe()
+    g_exe = game_exe()
+
+    if (launcher_exe is None or ICON.is_file()) or (g_exe is None or ICON.is_file()):
         return False
     ico = USER / "game-icon.ico"
-    return make_game_ico(game, ico) and make_shortcut(exe.with_name("The Last of Us Remastered.lnk"), exe, ico)
+    return make_game_ico(game, ico) and make_shortcut(launcher_exe.with_name("The Last of Us Remastered Launcher.lnk"), launcher_exe, ico) and make_shortcut(g_exe.with_name("The Last of Us Remastered.lnk"), g_exe, ico)
 
 
 def toggle_mask(disabled):
@@ -1268,7 +1313,12 @@ def write_toggles(mask, path=None):
 def game_env(switches, base=None, overrides=None, folders=None):
     """The environment of a run with these switches."""
     env = dict(os.environ if base is None else base)
-    env.update(overrides or {})
+    overrides = overrides or {}
+    env.update(overrides)
+    # This host's game build runs at the wrong speed with the monotonic fallback;
+    # preserve the calibrated native clock unless Startup explicitly disables it.
+    env["GOW3_NATIVE_TSC"] = overrides.get("GOW3_NATIVE_TSC", "1")
+    env["GOW3_GUEST_PRIORITY"] = overrides.get("GOW3_GUEST_PRIORITY", "1")
     if folders and folders.get("cache"):
         env["GOW3_GPU_CACHE_DIR"] = folders["cache"]
     env["GOW3_NO_MOTION_BLUR"] = "0" if switches["motion_blur"] else "1"
@@ -1282,6 +1332,40 @@ def game_env(switches, base=None, overrides=None, folders=None):
     if switches["profile"]:
         env.update(PROFILE_ENV)
     return env
+
+
+# The game's shader and pipeline caches in the cache folder: <serial> (shaders and pipeline
+# binaries), <serial>.gpu-<n> (another GPU's, kept aside) and <serial>.zip (archived mode). Only
+# these are cleared, never the rest of a folder the player chose.
+CACHE_SERIAL = "CUSA00552"
+
+
+def cache_entries(folder):
+    try:
+        return sorted(p for p in Path(folder).iterdir()
+                      if p.name == CACHE_SERIAL or p.name.startswith(CACHE_SERIAL + "."))
+    except OSError:
+        return []
+
+
+def recycle(paths):
+    """Moves the paths to the Recycle Bin (SHFileOperationW, FO_DELETE with FOF_ALLOWUNDO): never a
+    permanent delete. True when it worked."""
+    if not paths:
+        return True
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
+                    ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+    fo_delete, fof_silent, fof_noconfirmation, fof_allowundo, fof_noerrorui = 3, 0x4, 0x10, 0x40, 0x400
+    files = "".join(str(Path(p).resolve()) + "\0" for p in paths) + "\0"
+    op = SHFILEOPSTRUCTW(None, fo_delete, files, None,
+                         fof_silent | fof_noconfirmation | fof_allowundo | fof_noerrorui, False, None, None)
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    return result == 0 and not op.fAnyOperationsAborted and not any(Path(p).exists() for p in paths)
 
 
 def python_exe():
@@ -1805,9 +1889,9 @@ class Launcher(tk.Tk):
 
         def change(value):
             if key == "game" and value and not (Path(value) / "eboot.bin").is_file():
-                error.config(text=self.t("no_eboot"))
+                error.config(text=self.t("no_eboot"), fg=ERROR)
                 return
-            error.config(text="")
+            error.config(text="", fg=ERROR)
             if value:
                 self.folders[key] = value
             else:
@@ -1824,7 +1908,23 @@ class Launcher(tk.Tk):
             if chosen:
                 change(str(Path(chosen)))
 
-        for column, (label, command) in enumerate(((self.t("browse"), browse), (self.t("default_folder"), lambda: change("")))):
+        def clear():
+            if game_running():
+                error.config(text=self.t("clear_running"), fg=ERROR)
+                return
+            entries = cache_entries(shown.get())
+            if not entries:
+                error.config(text=self.t("clear_empty"), fg=MUTED)
+                return
+            if not messagebox.askyesno(self.t("cache_folder"), self.t("clear_confirm"), parent=window):
+                return
+            ok = recycle(entries)
+            error.config(text=self.t("clear_done" if ok else "clear_failed"), fg=MUTED if ok else ERROR)
+
+        buttons = [(self.t("browse"), browse), (self.t("default_folder"), lambda: change(""))]
+        if key == "cache":
+            buttons.append((self.t("clear_cache"), clear))
+        for column, (label, command) in enumerate(buttons):
             tk.Button(area, text=label, command=command, bg=PANEL, fg=TEXT, bd=0, cursor="hand2", activebackground="#222",
                       activeforeground=ACCENT, font=("Segoe UI", 9), padx=10).grid(row=1, column=column + 1, padx=(6, 0), ipady=2)
         area.change = change    # (tests)

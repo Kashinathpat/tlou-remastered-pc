@@ -11,7 +11,7 @@ and a Vulkan renderer (the shadPS4 video core) executes the PS4 GPU work.
 ## Status
 
 Work in progress, reported playable from start to finish by a player, with one crash along the way
-that is not fixed yet, and with rough edges.
+that is not fixed yet (a workaround is under Known issues), and with rough edges.
 
 - **Frame rate:** on a laptop with a Core i7-8750H and a GTX 1050 Ti Mobile (4 GB), 60 FPS in light
   areas and about 40-44 FPS in the heaviest area tested, where the CPU side of the renderer is the
@@ -31,6 +31,15 @@ that is not fixed yet, and with rough edges.
     after the quarantine zone, cannot be shot down for that reason. Ruled out so far: the
     renderer's CPU/GPU data exchange, the port's patches and red-zone protection, and the CPU's
     approximate math instructions.
+  - Moving into a new part of a level can lose the Vulkan device: the runtime stops with
+    `Device lost during submit`. Serializing the render threads avoided it in a ten minute session
+    that walked into new geometry (`GOW3_DRAW_PIPE=0` and `GOW3_VK_RECORD_THREAD=0`, about 24-37
+    FPS against 49 in the courtyard there). The cause is not settled, and the two switches have
+    not been told apart yet.
+  - Soft shadows can look detached from objects, with a thin light outline around them and little
+    darkening where they touch the ground, most visibly under vehicle wheels. The same spot on a
+    PS4 has the contact darkening this port misses, so it is a port bug; the pass that draws it
+    has not been identified yet.
 - **Not available for this game yet:** a true mouse camera (the mouse drives the right stick
   instead, though no longer capped at the stick's top speed), the draw distance sliders and
   keyboard button prompts, which need the game's own camera code, settings block and prompt
@@ -48,7 +57,8 @@ that is not fixed yet, and with rough edges.
 
 **From a release:** extract the zip, open `TLOU Launcher.exe`, choose the game folder under Folders
 and press Play. Nothing else needs installing. After that, a shortcut with the game's icon appears
-beside the launcher.
+beside the launcher. `TLOU Game.exe` starts the game directly with the last settings selected in
+the launcher.
 
 **From this repository** (needs Python 3.10 or newer):
 

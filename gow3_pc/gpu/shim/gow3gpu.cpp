@@ -34,6 +34,7 @@
 #include "core/memory.h"
 #include "core/signals.h"
 #include "sdl_window.h"
+#include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 extern "C" {
@@ -517,6 +518,11 @@ extern "C" int gow3gpu_init(const Gow3GpuConfig* config) {
             WindowThreadIdle(window->GetSDLWindow());
         }
         LOG_INFO(Frontend, "Window closed by user");
+        // gow3 (SpartanPort c22329f): shaders compiled just before closing are still queued
+        // for the disk; give them up to 2 s.
+        if (!Storage::DataBase::Instance().Flush(std::chrono::seconds(2))) {
+            LOG_WARNING(Frontend, "Shader cache writes still pending at exit");
+        }
         std::fflush(stdout);
         std::_Exit(0);
     });

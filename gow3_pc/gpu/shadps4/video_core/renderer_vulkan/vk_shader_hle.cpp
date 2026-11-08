@@ -452,10 +452,38 @@ static bool ExecuteScalarCopyHLE(const Shader::Info& info, const AmdGpu::Compute
     const VAddr dst_addr = dst.base_address;
     const u64 size = count * 4;
     auto& buffer_cache = rasterizer.GetBufferCache();
+    auto& runtime = rasterizer.GetRuntime();
     // GPU-written source bytes: the GPU copies them in order (the SRT walker then downloads the
     // destination when it reads it, Rasterizer::SyncSrtTables). Surface copies (depth, MiBs)
     // stay on the GPU too.
     if (size > 64_KB) {
+        // The Last of Us's 64-wide scalar copy (82c46b8b) can cover large contiguous ranges. Its
+        // compute dispatch has caused device loss while those copies were in flight during level
+        // streaming. Keep GPU ordering, but use a transfer copy for the exact, non-overlapping
+        // case; the guest may write the source after this command is queued, so a CPU copy is too
+        // early. Irregular and overlapping cases retain the original shader.
+        const bool guest_overlap = src_addr <= dst_addr ? dst_addr - src_addr < size
+                                                        : src_addr - dst_addr < size;
+        auto& texture_cache = rasterizer.GetTextureCache();
+        const bool stencil_copy = texture_cache.FindStencilPlaneDepth(src_addr) &&
+                                  (texture_cache.FindStencilPlaneDepth(dst_addr) ||
+                                   texture_cache.FindStencilTexture(dst_addr));
+        if (info.pgm_hash == TLOU_SCALAR_COPY64_SHADER_HASH && readable == count &&
+            size <= u64(~u32{0}) && !guest_overlap && rasterizer.IsMapped(src_addr, size) &&
+            rasterizer.IsMapped(dst_addr, size) && !stencil_copy) {
+            const auto [src_buffer, src_offset] =
+                buffer_cache.ObtainBuffer(src_addr, static_cast<u32>(size), false);
+            const auto [dst_buffer, dst_offset] =
+                buffer_cache.ObtainBuffer(dst_addr, static_cast<u32>(size), true);
+            const bool same_buffer_overlap = src_buffer->Handle() == dst_buffer->Handle() &&
+                                             src_offset < dst_offset + size &&
+                                             dst_offset < src_offset + size;
+            if (!same_buffer_overlap) {
+                const std::array copies{vk::BufferCopy{src_offset, dst_offset, size}};
+                runtime.CopyBuffer(src_buffer, dst_buffer, copies);
+                return true;
+            }
+        }
         return to_gpu("size", src_addr, dst_addr, size);
     }
     if (!rasterizer.IsMapped(dst_addr, size)) {

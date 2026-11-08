@@ -17,17 +17,18 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <functional>
-#include <future>
 #include <mutex>
 #include <queue>
 
 namespace {
 
-std::mutex submit_mutex{};
-u32 num_requests{};
+// gow3 (SpartanPort c22329f): one mutex guards queued and running writes; a stop drains them.
 std::condition_variable_any request_cv{};
-std::queue<std::packaged_task<void()>> req_queue{};
+std::condition_variable idle_cv{};
+std::queue<std::function<void()>> req_queue{};
+bool io_busy{};
 std::mutex m_request{};
 
 mz_zip_archive zip_ar{};
@@ -40,33 +41,25 @@ namespace Storage {
 void ProcessIO(const std::stop_token& stoken) {
     Common::SetCurrentThreadName("shadPS4:PipelineCacheIO");
 
-    while (!stoken.stop_requested()) {
+    // gow3: a stop drains accepted writes; idle includes the write currently running.
+    for (;;) {
+        std::function<void()> request;
         {
-            std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
-        }
-
-        if (stoken.stop_requested()) {
-            break;
-        }
-
-        while (num_requests) {
-            std::packaged_task<void()> request{};
-            {
-                std::scoped_lock lock{m_request};
-                if (req_queue.empty()) {
-                    continue;
-                }
-                request = std::move(req_queue.front());
-                req_queue.pop();
+            std::unique_lock lk{m_request};
+            io_busy = false;
+            idle_cv.notify_all();
+            Common::CondvarWait(request_cv, lk, stoken, [&] { return !req_queue.empty(); });
+            if (req_queue.empty()) {
+                return;
             }
-
-            if (request.valid()) {
-                request();
-                request.get_future().wait();
-            }
-
-            --num_requests;
+            request = std::move(req_queue.front());
+            req_queue.pop();
+            io_busy = true;
+        }
+        try {
+            request();
+        } catch (const std::exception& e) {
+            LOG_ERROR(Render, "Cache write failed: {}", e.what());
         }
     }
 }
@@ -114,8 +107,13 @@ void DataBase::Open() {
         }
     } else {
         cache_path = GetUserPath(PathType::CacheDir) / game_info.GameSerial();
-        if (!std::filesystem::exists(cache_path)) {
-            std::filesystem::create_directories(cache_path);
+        // gow3: no cache on a directory error, rather than an exception at startup.
+        std::error_code error;
+        std::filesystem::create_directories(cache_path, error);
+        if (error) {
+            LOG_WARNING(Render, "Shader cache unavailable at {}: {}", cache_path.string(),
+                        error.message());
+            return;
         }
     }
 
@@ -140,10 +138,20 @@ void DataBase::Close() {
     LOG_INFO(Render, "Cache dumped");
 }
 
+// gow3: waits for queued and running writes, bounded: the worker may be blocked on the disk.
+bool DataBase::Flush(std::chrono::milliseconds timeout) {
+    if (!IsOpened()) {
+        return true;
+    }
+    std::unique_lock lk{m_request};
+    return idle_cv.wait_for(lk, timeout, [] { return req_queue.empty() && !io_busy; });
+}
+
 template <typename T>
 bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector<T>&& v) {
     {
-        auto request = std::packaged_task<void()>{[=]() {
+        // gow3: the payload moves into the queue instead of being copied on the GPU thread.
+        std::function<void()> request = [type, path_ = std::move(path_), v = std::move(v)]() {
             auto path{path_};
             path.replace_extension(GetBlobFileExtension(type));
             if (EmulatorSettings.IsPipelineCacheArchived()) {
@@ -155,7 +163,7 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                 }
             } else {
                 // gow3: write beside and rename into place, so a game that ends during the
-                // write (the queue is not drained at exit) never leaves a truncated blob that
+                // write (an exit flush may time out) never leaves a truncated blob that
                 // the next start would load.
                 using namespace Common::FS;
                 auto temp{path};
@@ -187,13 +195,10 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                     std::filesystem::remove(temp, ignored);
                 }
             }
-        }};
+        };
         std::scoped_lock lock{m_request};
         req_queue.emplace(std::move(request));
     }
-
-    std::scoped_lock lk{submit_mutex};
-    ++num_requests;
     request_cv.notify_one();
     return true;
 }
@@ -214,9 +219,21 @@ void LoadVector(BlobType type, std::filesystem::path& path, std::vector<T>& v) {
         v.resize(stat.m_uncomp_size / sizeof(T));
         mz_zip_reader_extract_to_mem(&zip_ar, index, v.data(), stat.m_uncomp_size, 0);
     } else {
+        // gow3: a failed or partial load stays a cache miss (an empty vector).
+        v.clear();
         const auto file = IOFile{path, FileAccessMode::Read};
-        v.resize(file.GetSize() / sizeof(T));
-        file.Read(v);
+        if (!file.IsOpen()) {
+            return;
+        }
+        const auto bytes = file.GetSize();
+        if (bytes % sizeof(T) != 0) {
+            return;
+        }
+        v.resize(bytes / sizeof(T));
+        if (file.Read(v) != v.size()) {
+            v.clear();
+            return;
+        }
     }
 }
 
@@ -472,8 +489,6 @@ void DataBase::Remove(BlobType type, const std::string& name) {
             std::filesystem::remove(std::filesystem::path{path} += ".tmp", ignored);
         });
     }
-    std::scoped_lock lk{submit_mutex};
-    ++num_requests;
     request_cv.notify_one();
 }
 

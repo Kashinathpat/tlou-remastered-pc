@@ -15,7 +15,8 @@ Requisitos: Windows 10/11 de 64 bits e placa de vídeo com Vulkan. Não precisa 
    aparecer travadas até eles entrarem no cache.
 
 Depois de escolher a pasta do jogo, aparece aqui o atalho "The Last of Us Remastered", com o ícone
-do jogo: use-o para abrir o launcher, e copie-o para onde quiser.
+do jogo: use-o para abrir o launcher, e copie-o para onde quiser. Também é possível abrir
+"TLOU Game.exe" para iniciar diretamente com as últimas configurações salvas no launcher.
 
 Se o jogo oscilar, teste o limite de 30 FPS no launcher: o movimento fica mais regular.
 Saves, configurações e logs ficam em analysis\ dentro desta pasta. Ao atualizar o port,
@@ -35,7 +36,8 @@ Requirements: 64-bit Windows 10/11 and a Vulkan graphics card. No Python install
    they are in the cache.
 
 Once the game folder is set, a "The Last of Us Remastered" shortcut with the game's icon appears
-here: use it to open the launcher, and copy it wherever you like.
+here: use it to open the launcher, and copy it wherever you like. You can also open
+"TLOU Game.exe" to start directly with the settings last saved in the launcher.
 
 If the frame rate swings, try the 30 FPS limit in the launcher: motion gets more even.
 Saves, settings and logs are in analysis\ inside this folder. Keep it when you update the port.

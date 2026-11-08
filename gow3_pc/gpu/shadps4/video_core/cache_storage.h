@@ -7,6 +7,8 @@
 #include "common/singleton.h"
 #include "common/types.h"
 
+#include <atomic>
+#include <chrono>
 #include <functional>
 #include <thread>
 #include <vector>
@@ -28,6 +30,8 @@ public:
 
     void Open();
     void Close();
+    /// gow3: waits for queued and running writes; false if the timeout expires first.
+    bool Flush(std::chrono::milliseconds timeout);
     [[nodiscard]] bool IsOpened() const {
         return opened;
     }
@@ -68,7 +72,7 @@ public:
 private:
     std::jthread io_worker{};
     std::filesystem::path cache_path{};
-    bool opened{};
+    std::atomic<bool> opened{}; ///< gow3: read by the window thread's exit flush
 };
 
 } // namespace Storage

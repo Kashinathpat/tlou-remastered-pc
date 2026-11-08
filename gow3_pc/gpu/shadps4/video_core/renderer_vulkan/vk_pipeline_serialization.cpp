@@ -1238,27 +1238,35 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
             ++num_total_pipelines;
             report();
 
-            Serialization::Archive ar{std::move(data)};
-            Serialization::Reader pldata{ar};
+            // gow3 (SpartanPort c22329f): a damaged record is skipped, and the stage selection
+            // it left half filled is cleared.
+            try {
+                Serialization::Archive ar{std::move(data)};
+                Serialization::Reader pldata{ar};
 
-            u32 version{};
-            pldata.Read(version);
-            if (version != Serialization::PipelineKeyVersion) {
-                return;
-            }
+                u32 version{};
+                pldata.Read(version);
+                if (version != Serialization::PipelineKeyVersion) {
+                    return;
+                }
 
-            u32 is_compute{};
-            pldata.Read(is_compute);
+                u32 is_compute{};
+                pldata.Read(is_compute);
 
-            bool result{};
-            if (is_compute) {
-                result = LoadComputePipeline(ar);
-            } else {
-                result = LoadGraphicsPipeline(ar);
-            }
+                bool result{};
+                if (is_compute) {
+                    result = LoadComputePipeline(ar);
+                } else {
+                    result = LoadGraphicsPipeline(ar);
+                }
 
-            if (result) {
-                ++num_pipelines;
+                if (result) {
+                    ++num_pipelines;
+                }
+            } catch (const std::exception&) {
+                sel.infos.fill(nullptr);
+                sel.modules.fill(nullptr);
+                sel.fetch_shader.reset();
             }
         });
 
@@ -1445,7 +1453,12 @@ void PipelineCache::ReadWarmEntries(BackgroundWarmup& warm) {
         std::vector<u8> data;
         db.Load(Storage::BlobType::PipelineKey, warm.order[i], data);
         if (!data.empty()) {
-            ReadWarmEntry(warm, std::move(data));
+            // gow3: a damaged record is skipped; the reader keeps going.
+            try {
+                ReadWarmEntry(warm, std::move(data));
+            } catch (const std::exception&) {
+                warm.done.fetch_add(1, std::memory_order_relaxed);
+            }
         }
     }
     // The last reader ends the reading (the GPU thread waits for `reading` to finish up).
@@ -1514,9 +1527,15 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
             if (!meta_blob.empty()) {
                 Serialization::Archive meta_ar{std::move(meta_blob)};
                 u64 binary_hash{};
-                if (LoadShaderMeta(meta_ar, stage->program->info, stage->fetch, stage->spec,
-                                   stage->perm_idx, binary_hash) &&
-                    !IsCrowdedShader(stage->program->info.pgm_hash)) {
+                // gow3: a damaged meta leaves the stage unusable (no module), not thrown out of
+                // call_once to every record that shares it.
+                bool meta_ok = false;
+                try {
+                    meta_ok = LoadShaderMeta(meta_ar, stage->program->info, stage->fetch,
+                                             stage->spec, stage->perm_idx, binary_hash);
+                } catch (const std::exception&) {
+                }
+                if (meta_ok && !IsCrowdedShader(stage->program->info.pgm_hash)) {
                     std::vector<u32> spv;
                     db.Load(Storage::BlobType::ShaderBinary,
                             Serialization::ShaderBinaryName(stage->program->info.pgm_hash,
@@ -1896,6 +1915,11 @@ bool PersistentSrtInfo::Deserialize(Serialization::Archive& ar) {
     srt.Read(this, sizeof(*this));
 
     if (walker_func_size) {
+        // gow3: truncated walker code is rejected before registering bytes past the record.
+        if (walker_func_size > ar.Remaining()) {
+            walker_func = nullptr;
+            throw Serialization::CorruptData{};
+        }
         walker_func = RegisterWalkerCode(ar.CurrPtr(), walker_func_size);
         ar.Advance(walker_func_size);
     }

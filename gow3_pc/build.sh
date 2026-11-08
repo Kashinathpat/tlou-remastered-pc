@@ -47,6 +47,10 @@ MINGW*|MSYS*)
     clang -O2 -Wall -Wextra -Werror -static -municode -mwindows ../launcher/tlou-launcher.c \
         "${launcher_icon[@]}" -o "../launcher/TLOU Launcher.exe"
     echo "Built $(dirname "$PWD")/launcher/TLOU Launcher.exe"
+    # The game without the launcher's window: the launcher's saved settings, read by run_game.py.
+    clang -O2 -Wall -Wextra -Werror -static -municode -mwindows ../launcher/tlou-game.c \
+        -o "../TLOU Game.exe"
+    echo "Built $(dirname "$PWD")/TLOU Game.exe"
     exit 0
     ;;
 esac
