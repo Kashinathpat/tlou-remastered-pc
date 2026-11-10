@@ -135,6 +135,27 @@ public:
         return consumed.load(std::memory_order_acquire) == head;
     }
 
+    /// Any thread but stage B: waits until stage B has run every packet published so far, at
+    /// most `timeout_ns`. Returns 0 when nothing was pending, 1 after waiting, 2 on the timeout.
+    u32 WaitPublished(u64 timeout_ns) {
+        const u64 target = published.load(std::memory_order_acquire);
+        if (consumed.load(std::memory_order_acquire) >= target) {
+            return 0;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::nanoseconds(timeout_ns);
+        for (u32 spins = 0; consumed.load(std::memory_order_acquire) < target; ++spins) {
+            if (spins < 4096) {
+                __builtin_ia32_pause();
+            } else {
+                std::this_thread::yield();
+                if ((spins & 255) == 0 && std::chrono::steady_clock::now() >= deadline) {
+                    return 2;
+                }
+            }
+        }
+        return 1;
+    }
+
     /// Statistics (stage A): packets, drains that had to wait, cycles waited, cycles stage B
     /// spent running packets.
     u64 packets = 0, drains = 0, drain_cycles = 0;

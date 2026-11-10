@@ -9,6 +9,8 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
 
 #include "common/assert.h"
 #include "common/types.h"
@@ -19,12 +21,19 @@ namespace Vulkan {
 
 class ConstantRing {
 public:
-    static constexpr u64 Capacity = 32ull << 20;
+    /// 32 MiB; GOW3_CONSTANT_RING_MB=<n> (1-1024, diagnostics): a smaller ring is reused sooner,
+    /// so a region reused while the GPU still reads it shows up sooner.
+    static u64 ConfiguredCapacity() {
+        const char* env = std::getenv("GOW3_CONSTANT_RING_MB");
+        const u64 mb = env ? std::strtoull(env, nullptr, 10) : 0;
+        return (mb >= 1 && mb <= 1024 ? mb : 32) << 20;
+    }
 
     ConstantRing(const Instance& instance, Scheduler& scheduler_)
-        : scheduler{scheduler_},
+        : Capacity{ConfiguredCapacity()}, scheduler{scheduler_},
           buffer{instance, 0, Capacity, VideoCore::MemoryType::Stream, "gow3 constant ring"} {
         ASSERT(!buffer.mapped_data.empty());
+        std::printf("Constant ring: %llu MiB\n", static_cast<unsigned long long>(Capacity >> 20));
     }
 
     [[nodiscard]] vk::Buffer Handle() const noexcept {
@@ -108,6 +117,7 @@ private:
         u64 end;
         u64 tick;
     };
+    const u64 Capacity;
     Scheduler& scheduler;
     VideoCore::Buffer buffer;
     u64 position = 0;     ///< stage A

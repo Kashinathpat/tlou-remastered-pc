@@ -251,7 +251,13 @@ def main():
     # CPU-dirty range; and one frame in flight, the game building the next frame while the GPU
     # command thread still decodes the last one, instead of both waiting for the other at each
     # sceGnmSubmitDone (liverpool.h, FramesInFlight).
-    env.setdefault("GOW3_DRAW_PIPE", "1")
+    # 9 Nov 2026: the two-stage draw pipe (draw recording thread) is off. With it, a save that
+    # walks into new level geometry lost the Vulkan device ("Device lost during submit") 70-160 s
+    # into play in 9 of 10 runs; without it, 2 runs of 2 went past that point (one for 6 minutes)
+    # at the same frame rate there (~46-50 FPS against ~45-51). Its cause inside the pipe is not
+    # found yet (not the pipelined dispatches, its six other parts, GOW3_FEWER_DRAINS, the Vulkan
+    # recording thread or the constant ring's size). The launcher's Startup tab turns it back on.
+    env.setdefault("GOW3_DRAW_PIPE", "0")
     env.setdefault("GOW3_VK_RECORD_THREAD", "1")
     env.setdefault("GOW3_DMA_SYNC", "pointers 256")
     env.setdefault("GOW3_FRAMES_IN_FLIGHT", "1")

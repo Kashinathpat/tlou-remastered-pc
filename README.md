@@ -31,11 +31,12 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     after the quarantine zone, cannot be shot down for that reason. Ruled out so far: the
     renderer's CPU/GPU data exchange, the port's patches and red-zone protection, and the CPU's
     approximate math instructions.
-  - Moving into a new part of a level can lose the Vulkan device: the runtime stops with
-    `Device lost during submit`. Serializing the render threads avoided it in a ten minute session
-    that walked into new geometry (`GOW3_DRAW_PIPE=0` and `GOW3_VK_RECORD_THREAD=0`, about 24-37
-    FPS against 49 in the courtyard there). The cause is not settled, and the two switches have
-    not been told apart yet.
+  - Moving into a new part of a level could lose the Vulkan device: the runtime stopped with
+    `Device lost during submit`. It comes from the two-stage draw pipeline (draw recording
+    thread), now off by default: on a save that reproduced it 70-160 s into play in 9 of 10 runs,
+    2 runs of 2 without it went past that point, at the same frame rate there (~46-50 FPS).
+    Where in the pipeline the fault lies is not found yet; "Draw pipeline" in the launcher's
+    Startup tab (`GOW3_DRAW_PIPE=1`) turns it back on.
   - Soft shadows can look detached from objects, with a thin light outline around them and little
     darkening where they touch the ground, most visibly under vehicle wheels. The same spot on a
     PS4 has the contact darkening this port misses, so it is a port bug; the pass that draws it

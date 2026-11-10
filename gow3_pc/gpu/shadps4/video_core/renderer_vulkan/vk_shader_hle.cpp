@@ -382,8 +382,20 @@ static bool ExecuteScalarCopyHLE(const Shader::Info& info, const AmdGpu::Compute
         const char* cpu64 = std::getenv("GOW3_SCALAR_COPY64_CPU");
         return cpu64 && cpu64[0] == '1' ? 0 : 64;
     }();
+    // gow3 9 Nov 2026: the early return below keeps every 64-wide copy on the shader by default,
+    // so the 0.1.7 transfer copy for The Last of Us's large ones (82c46b8b, past 64 KiB) only ran
+    // with GOW3_SCALAR_COPY64_CPU=1. GOW3_COPY64_TRANSFER=1 sends those large copies to it while
+    // small ones stay on the shader. Tried on a save that loses the device ~80 s into play: about
+    // 1000 copies (4.5 GB) per 5 s took it, a few more FPS, the device was still lost (now after
+    // e44070db), and the main menu's window curtains disappeared (no image invalidation then).
+    static const bool large_transfer = [] {
+        const char* env = std::getenv("GOW3_COPY64_TRANSFER");
+        return env && env[0] == '1';
+    }();
+    const bool shader_by_default = keep_gpu == int(per_group);
     const auto ud = info.UserData();
-    if (keep_gpu == -1 || keep_gpu == int(per_group)) {
+    if (keep_gpu == -1 ||
+        (shader_by_default && !(large_transfer && info.pgm_hash == TLOU_SCALAR_COPY64_SHADER_HASH))) {
         return false;
     }
     if (info.buffers.size() < 2 || ud.size() <= 6) {
@@ -481,10 +493,31 @@ static bool ExecuteScalarCopyHLE(const Shader::Info& info, const AmdGpu::Compute
             if (!same_buffer_overlap) {
                 const std::array copies{vk::BufferCopy{src_offset, dst_offset, size}};
                 runtime.CopyBuffer(src_buffer, dst_buffer, copies);
+                // As the shader's storage write does (Rasterizer::BindBuffers): images aliasing
+                // the destination are stale now.
+                texture_cache.InvalidateMemoryFromGPU(dst_addr, size);
+                // Every 5 s while it happens: how many large copies took the transfer path.
+                static std::atomic<u32> transfers{0};
+                static std::atomic<u64> transfer_bytes{0};
+                static std::atomic<s64> last_report{0};
+                ++transfers;
+                transfer_bytes += size;
+                const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+                if (s64 last = last_report.load(std::memory_order_relaxed);
+                    now - last >= 5 && last_report.compare_exchange_strong(last, now)) {
+                    std::printf("Copy64 transfer copies (5 s): %u, %.1f MB\n", transfers.exchange(0),
+                                double(transfer_bytes.exchange(0)) / (1 << 20));
+                    std::fflush(stdout);
+                }
                 return true;
             }
         }
         return to_gpu("size", src_addr, dst_addr, size);
+    }
+    if (shader_by_default) {
+        return false; // small 64-wide copies: the shader, as before (see keep_gpu)
     }
     if (!rasterizer.IsMapped(dst_addr, size)) {
         return to_gpu("destination unmapped", src_addr, dst_addr, size);

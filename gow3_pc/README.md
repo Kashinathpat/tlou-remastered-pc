@@ -20,6 +20,7 @@ Useful settings (environment, for diagnostics; `tools/probe_tlou.py` sets the us
 |---|---|
 | `GOW3_GPU_ID=<n>` | Vulkan device to use (index in the log's GPU list). |
 | `GOW3_ASYNC_READBACK=1` | GPU readbacks without waiting for the frame. |
+| `GOW3_AUTO_EOP_READBACK=1` | Small compute outputs (256 B-8 KiB) of any shader read back at the end-of-pipe event, beside the known physics results (the Android fork's rule; off by default). The log lists them every 5 s as `hash:slot:bytes` ("Automatic EOP readbacks"), the form `GOW3_EOP_READBACK_SHADERS` takes. On PC it reads back 12-17 times as many results as the known ones alone. |
 | `GOW3_FRAME_STATS=1`, `GOW3_FAULT_STATS=1`, `GOW3_PERF_DIAG=1` | Frame, fault and wait statistics every 5 s in the log. |
 | `GOW3_GPU_PROFILE=1` | GPU time per render pass (slows rendering). |
 | `GOW3_FAULT_TRACE=1` | The first 64 access violations, written straight to the log. |

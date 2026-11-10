@@ -39,6 +39,7 @@
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
+#include "video_core/renderer_vulkan/tlou_auto_readback.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -929,6 +930,26 @@ bool IsEopReadbackShader(u64 hash) {
 bool IsEopReadbackBinding(u64 hash, u32 slot, u64 size) {
     return IsEopReadbackShader(hash) ||
            (TlouEopReadbackBinding(hash, slot) && size <= 64_KB && EopReadbackMode() != 0);
+}
+
+/// gow3 9 Nov 2026 (The Last of Us Remastered): NPCs sometimes move in jumps. The Android fork
+/// reads back every small compute output at the end-of-pipe event, whatever its shader
+/// (TlouAutoReadback, tlou_auto_readback.h), and had no jumps; this port reads back only the two
+/// known physics results, the rest relaxed (a frame old when read). GOW3_AUTO_EOP_READBACK=1
+/// turns the Android rule on (with GOW3_EOP_READBACK=1, the default), to tell them apart.
+/// On PC (1.11) it takes ~30 bindings of 9 shaders, ~3000 readbacks/s (12-17x the known ones);
+/// its log lists them as hash:slot:bytes for GOW3_EOP_READBACK_SHADERS.
+static bool AutoEopReadback() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("GOW3_AUTO_EOP_READBACK");
+        const bool on = env && env[0] == '1' && EopReadbackMode() == 1;
+        if (on) {
+            std::printf("Automatic end-of-pipe readbacks: on (small compute outputs, any shader)\n");
+            std::fflush(stdout);
+        }
+        return on;
+    }();
+    return enabled;
 }
 
 /// gow3: a T# that passes the format check but cannot be a real texture: the treasure
@@ -5574,13 +5595,58 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     bound_buffers.emplace_back(buffer, offset, tracked_size, desc.is_written);
                 }
                 if (desc.is_written) {
+                    const bool exact_result =
+                        IsEopReadbackBinding(stage.pgm_hash, binding.buffer, size);
+                    // GOW3_AUTO_EOP_READBACK=1: small compute outputs of any shader too.
+                    const bool automatic_result =
+                        AutoEopReadback() &&
+                        TlouAutoReadback::Eligible(
+                            compute_stage, true, exact_result, vsharp.stride, vsharp.num_records,
+                            size, u32(eop_readbacks.size() + eop_open_readbacks.size()));
+                    if (AutoEopReadback() && compute_stage) {
+                        // Diagnostics every 5 s: how many it took, and the bindings (bounded
+                        // sample) they came from, as hash:slot:bytes - the form
+                        // GOW3_EOP_READBACK_SHADERS takes (hash:slot) to read back only those.
+                        static std::atomic<u32> accepted{0};
+                        static std::atomic<s64> last_report{0};
+                        static std::array<std::atomic<u64>, 64> shaders{};
+                        if (automatic_result) {
+                            accepted.fetch_add(1, std::memory_order_relaxed);
+                            const u64 identity = (u64(u32(stage.pgm_hash)) << 32) |
+                                                 (u64(binding.buffer & 0xff) << 24) |
+                                                 (size & 0xffffff);
+                            shaders[(identity * 0x9e3779b97f4a7c15ull) >> 58].store(
+                                identity, std::memory_order_relaxed);
+                        }
+                        const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                                            std::chrono::steady_clock::now().time_since_epoch())
+                                            .count();
+                        if (s64 last = last_report.load(std::memory_order_relaxed);
+                            now - last >= 5 && last_report.compare_exchange_strong(last, now)) {
+                            std::string list;
+                            u32 distinct = 0;
+                            for (auto& s : shaders) {
+                                if (const u64 id = s.exchange(0, std::memory_order_relaxed)) {
+                                    if (++distinct <= 24) {
+                                        list += fmt::format(" {:08x}:{}:{}", id >> 32,
+                                                            (id >> 24) & 0xff, id & 0xffffff);
+                                    }
+                                }
+                            }
+                            std::printf("Automatic EOP readbacks (5 s): %u, from %u bindings "
+                                        "(hash:slot:bytes):%s\n",
+                                        accepted.exchange(0, std::memory_order_relaxed), distinct,
+                                        list.c_str());
+                            std::fflush(stdout);
+                        }
+                    }
                     Gow3WatchRange::Note("storage", stage.pgm_hash, binding.buffer,
                                          vsharp.base_address, size);
                     VideoCore::NoteGpuWriter(vsharp.base_address, size, stage.pgm_hash);
                     VideoCore::NoteRecentGpuWrite(vsharp.base_address, size,
                                                   (u64(stage.pgm_hash) << 8) | (binding.buffer & 0xff));
                     if (VideoCore::BufferCache::ShareUnfinishedWrites() &&
-                        TlouResultShader(stage.pgm_hash)) {
+                        (TlouResultShader(stage.pgm_hash) || automatic_result)) {
                         buffer_cache.NoteResultPages(vsharp.base_address, size);
                     }
                     // gow3 24 Oct 2026 diagnostics: The Last of Us's result bindings left without
@@ -5606,7 +5672,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                             std::fflush(stdout);
                         }
                     }
-                    if (IsEopReadbackBinding(stage.pgm_hash, binding.buffer, size) &&
+                    if ((exact_result || automatic_result) &&
                         eop_readbacks.size() + eop_open_readbacks.size() < 256) {
                         // The whole bound buffer counts as GPU-written (up to 9 MiB for
                         // 6a6422a9); read back only what this dispatch writes: dword i for
@@ -7399,6 +7465,44 @@ void Rasterizer::UnmapMemory(VAddr addr, u64 size) {
     };
     const auto t0 = Clock::now();
     DrainDrawPipe();
+    // gow3 9 Nov 2026: the runtime calls this on the game thread that unmapped, where
+    // DrainDrawPipe does nothing (stage A only), so the caches could drop buffers and images of
+    // this range while the draw recording thread still had packets for it. It waits for stage B
+    // to run what stage A has handed it (at most 2 s). Not the cause of The Last of Us's device
+    // loss entering new geometry: no game-thread unmap came before it, and in a 6-minute run
+    // the one that came found nothing pending. GOW3_UNMAP_WAITS_PIPE=0: no wait, as before.
+    static const bool unmap_waits_pipe = [] {
+        const char* env = std::getenv("GOW3_UNMAP_WAITS_PIPE");
+        return !(env && env[0] == '0');
+    }();
+    if (draw_pipe && unmap_waits_pipe && !OnStageA() && !DrawPipe::OnStageB()) {
+        static std::atomic<u32> calls{0}, waited{0}, timeouts{0};
+        static std::atomic<s64> last_wait_report{0};
+        ++calls;
+        switch (draw_pipe->WaitPublished(2'000'000'000ull)) {
+        case 1:
+            ++waited;
+            break;
+        case 2:
+            ++timeouts;
+            std::printf("GPU: unmap %#llx+%#llx: the draw recording thread did not catch up in 2 s\n",
+                        static_cast<unsigned long long>(addr), static_cast<unsigned long long>(size));
+            std::fflush(stdout);
+            break;
+        default:
+            break;
+        }
+        const s64 now_s = std::chrono::duration_cast<std::chrono::seconds>(
+                              Clock::now().time_since_epoch())
+                              .count();
+        if (s64 last = last_wait_report.load(std::memory_order_relaxed);
+            now_s - last >= 5 && last_wait_report.compare_exchange_strong(last, now_s)) {
+            std::printf("GPU: unmaps from game threads (5 s): %u, %u with draw packets still "
+                        "pending (waited), %u timeouts\n",
+                        calls.exchange(0), waited.exchange(0), timeouts.exchange(0));
+            std::fflush(stdout);
+        }
+    }
     const auto t1 = Clock::now();
     buffer_cache.InvalidateMemory(addr, size);
     const auto t2 = Clock::now();
