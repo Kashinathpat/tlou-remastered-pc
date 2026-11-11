@@ -35,10 +35,14 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     its largest cloths (`Cs_ClothSimulate512`) lost the Vulkan device in Pittsburgh, once Henry and
     Sam appear: the runtime stopped with `Device lost during submit`, and Windows' System event log
     shows `nvlddmkm` "SKEDCHECK19_CTA_REGISTER_CONSUMPTION failed". A replay of that route lost it
-    on 17 of 18 runs, on drivers 582.53 and 582.78, whatever was changed in the shader. On those
-    cards the solver is not run, and that cloth follows the body instead of being simulated: 0
-    device losses in 9 runs, nothing amiss in the frames compared (`GOW3_PASCAL_CLOTH512=1` runs it
-    anyway). Newer cards run it (an RTX 5060 went through the same scene). The two-stage draw
+    on 17 of 18 runs, on drivers 582.53 and 582.78, whatever was changed in the shader. Its one
+    workgroup of 512 threads needs all the registers of a multiprocessor; on those cards it now
+    runs as 256 threads that simulate 2 vertices each, with the same arithmetic (the shader
+    compiler's "lanes", `lane_coarsening.cpp`): no device loss in 6 replays of
+    that route. "Cloth workaround" in the launcher's Startup tab, unchecked
+    (`GOW3_PASCAL_CLOTH512=1`), runs the solver as it is; `GOW3_PASCAL_CLOTH512=skip` does not
+    run it there (that cloth then follows the body). Newer cards run it as it is (an RTX 5060
+    went through the same scene). The two-stage draw
     pipeline, blamed before, made the loss more frequent but was not its cause, and is on again
     ("Draw pipeline" in the launcher's Startup tab, `GOW3_DRAW_PIPE=0` turns it off).
   - Soft shadows can look detached from objects, with a thin light outline around them and little

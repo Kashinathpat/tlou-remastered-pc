@@ -27,3 +27,6 @@ Ported from BilalReloaded's Uncharted port 0.8.4 (ea7a110b1, 2026-11): shared_me
 After SuperMedo's 031baf5 / BilalReloaded 0.8.3: compute workgroups above 256 threads that share
   nothing run as workgroups of 64 (WorkgroupSplitFactors; X, Y and Z, every part in X, the split
   read back from the SPIR-V LocalSize at the dispatch; GOW3_WORKGROUP_SPLIT).
+Lane coarsening (11 Nov 2026, lane_coarsening.cpp, LaneTraversal in emit_spirv.cpp): a compute
+  shader can run several guest invocations per host invocation; regions between barriers are
+  emitted once per lane, barriers and the constructs holding them once (GOW3_LANE_COARSEN).

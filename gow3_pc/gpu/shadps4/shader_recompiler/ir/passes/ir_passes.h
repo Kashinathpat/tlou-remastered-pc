@@ -48,6 +48,12 @@ bool MultiwaveLdsBarriers(u64 pgm_hash);
 void SharedMemoryBoundsPass(IR::Program& program, const RuntimeInfo& runtime_info,
                             const Profile& profile);
 bool SharedMemoryBounds(u64 pgm_hash);
+/// gow3 11 Nov 2026 (lane_coarsening.cpp): how many guest invocations each host invocation of
+/// this compute shader runs (1: one). The GPU it runs on is set once by the renderer.
+u32 LaneCoarsening(u64 pgm_hash);
+void SetLaneCoarseningGpu(u32 vendor_id, u32 device_id);
+/// gow3 11 Nov 2026: the largest cloth solver is skipped at the dispatch (vk_rasterizer.cpp).
+bool SkipLargeClothSolver(u64 pgm_hash);
 void SharedMemorySimplifyPass(IR::Program& program, const Profile& profile);
 void SharedMemoryToStoragePass(IR::Program& program, const RuntimeInfo& runtime_info,
                                const Profile& profile);

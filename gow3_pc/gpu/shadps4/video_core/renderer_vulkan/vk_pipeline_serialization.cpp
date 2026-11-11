@@ -54,8 +54,11 @@ static constexpr u32 LdsBoundsMagic = 0x42444c47u;
 /// gow3: the cache name of a shader's SPIR-V. Shaders that gained multi-wave LDS barriers get a
 /// new name, so binaries cached before the fix are not found and only those shaders recompile.
 static std::string ShaderBinaryName(u64 pgm_hash, size_t perm_idx) {
-    return fmt::format("{:#018x}_{}{}", pgm_hash, perm_idx,
-                       Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "");
+    // gow3 11 Nov 2026: and shaders compiled with lanes (lane_coarsening.cpp), "_lanes2".
+    const u32 lanes = Shader::Optimization::LaneCoarsening(pgm_hash);
+    return fmt::format("{:#018x}_{}{}{}", pgm_hash, perm_idx,
+                       Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "",
+                       lanes > 1 ? fmt::format("_lanes{}", lanes) : std::string{});
 }
 } // namespace Serialization
 

@@ -227,6 +227,11 @@ static Id SplitLocalInvocation(EmitContext& ctx, u32 comp) {
     const Id host = ctx.OpCompositeExtract(
         ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.local_invocation_id), comp);
     const u32 factor = ctx.workgroup_split[comp];
+    // gow3 11 Nov 2026 (TraverseLanes): lane L of a host invocation is guest X + L * host X.
+    if (comp == 0 && ctx.lane > 0) {
+        const u32 host_x = ctx.runtime_info.hw.cs.workgroup_size[0] / ctx.lanes;
+        return ctx.OpIAdd(ctx.U32[1], host, ctx.ConstU32(ctx.lane * host_x));
+    }
     if (factor == 1) {
         return host;
     }
@@ -279,7 +284,7 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     case IR::Attribute::LocalInvocationId:
         return SplitLocalInvocation(ctx, comp);
     case IR::Attribute::LocalInvocationIndex:
-        if (ctx.workgroup_split_any) {
+        if (ctx.workgroup_split_any || ctx.lanes > 1) {
             return SplitLocalInvocationIndex(ctx);
         }
         return ctx.OpLoad(ctx.U32[1], ctx.local_invocation_index);

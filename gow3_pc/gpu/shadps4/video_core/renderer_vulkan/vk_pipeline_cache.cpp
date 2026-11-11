@@ -22,6 +22,7 @@
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/runtime_info.h"
 #include "gow3_settings.h"
@@ -364,6 +365,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
       desc_heap{instance, scheduler.GetWorkSemaphore(), DescriptorHeapSizes} {
     sel.regs = &liverpool->regs;
+    // gow3 11 Nov 2026: shaders compiled with lanes on this GPU (lane_coarsening.cpp).
+    Shader::Optimization::SetLaneCoarseningGpu(instance.GetVendorID(), instance.GetDeviceID());
     const auto& vk12_props = instance.GetVk12Properties();
     profile = Shader::Profile{
         .max_viewport_width = instance.GetMaxViewportWidth(),

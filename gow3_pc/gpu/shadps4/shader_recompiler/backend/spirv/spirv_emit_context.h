@@ -288,6 +288,10 @@ public:
     /// (WorkgroupSplitFactors); `workgroup_split_any`: some factor is above 1.
     std::array<u32, 3> workgroup_split{1, 1, 1};
     bool workgroup_split_any{};
+    /// gow3 11 Nov 2026 (TraverseLanes, lane_coarsening.cpp): guest invocations per host
+    /// invocation, in X, and the one being emitted (its invocation ID: host + lane * host size).
+    u32 lanes{1};
+    u32 lane{};
     Id workgroup_id{};
     Id num_workgroups_id{};
     Id workgroup_index_id{};

@@ -4,10 +4,13 @@
 #include <cstdint>
 #include <cstddef>
 #include <setjmp.h>
+#ifdef _WIN32
+typedef unsigned long long sigjmp_buf[32]; // as gow3_toggles.h (no signals on Windows)
+#endif
 // Renderer tests have no guest process. Clock/host-thread services work; guest accesses abort.
 extern "C" {
-thread_local sigjmp_buf* runtime_fault_recover = nullptr;
-uint32_t runtime_disabled_optimizations = 0;
+__thread sigjmp_buf* runtime_fault_recover = nullptr;
+uint64_t runtime_disabled_optimizations = 0;
 uint64_t runtime_tsc_frequency() { return 1000000000; }
 int runtime_file_translate(const char*, char*, size_t) { std::abort(); }
 uint64_t runtime_memory_clamp(uintptr_t, uint64_t) { std::abort(); }

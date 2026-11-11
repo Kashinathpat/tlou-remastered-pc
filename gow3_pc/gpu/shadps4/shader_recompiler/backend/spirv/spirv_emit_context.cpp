@@ -9,6 +9,7 @@
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/attribute.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/microinstruction.h"
 #include "shader_recompiler/runtime_info.h"
 
@@ -492,6 +493,16 @@ void EmitContext::DefineInputs() {
         // IDs come from the host workgroup ID too.
         workgroup_split = WorkgroupSplitFactors(info.cs_split_eligible, runtime_info.hw.cs);
         workgroup_split_any = workgroup_split[0] * workgroup_split[1] * workgroup_split[2] > 1;
+        // gow3 11 Nov 2026 (lane_coarsening.cpp): guest invocations per host invocation, for
+        // one-dimensional workgroups that are not split. EmitSPIRV can still fall back to 1.
+        if (const u32 want = Optimization::LaneCoarsening(info.pgm_hash);
+            want > 1 && !workgroup_split_any &&
+            runtime_info.hw.cs.workgroup_size[1] == 1 &&
+            runtime_info.hw.cs.workgroup_size[2] == 1 &&
+            runtime_info.hw.cs.workgroup_size[0] % want == 0 &&
+            runtime_info.hw.cs.workgroup_size[0] / want >= 32) {
+            lanes = want;
+        }
         if (WorkgroupSplitSize(runtime_info.hw.cs.workgroup_size) && !runtime_info.hw.cs.indirect) {
             const auto& size = runtime_info.hw.cs.workgroup_size;
             std::printf("GPU: compute shader %#llx, %ux%ux%u workgroups: ",
@@ -520,7 +531,8 @@ void EmitContext::DefineInputs() {
         }
         // A split workgroup's guest invocation index is built from the guest invocation IDs.
         if (info.loads.GetAny(IR::Attribute::LocalInvocationId) ||
-            (workgroup_split_any && info.loads.Get(IR::Attribute::LocalInvocationIndex))) {
+            ((workgroup_split_any || lanes > 1) &&
+             info.loads.Get(IR::Attribute::LocalInvocationIndex))) {
             local_invocation_id =
                 DefineVariable(U32[3], spv::BuiltIn::LocalInvocationId, spv::StorageClass::Input);
         }

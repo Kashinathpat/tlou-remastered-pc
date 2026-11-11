@@ -3,9 +3,15 @@
 
 #include <span>
 #include <cstdlib>
+#include <cstdio>
+#include <optional>
+#include <string>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+#include <boost/container/small_vector.hpp>
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/assert.h"
@@ -228,13 +234,518 @@ void Traverse(EmitContext& ctx, const IR::Program& program) {
     }
 }
 
-Id DefineMain(EmitContext& ctx, const IR::Program& program) {
+// gow3 11 Nov 2026: lane coarsening (lane_coarsening.cpp). Each host invocation runs
+// `ctx.lanes` guest invocations: guest X = host X + lane * host size. The program is cut at its
+// barriers. What lies between two of them (a region) is emitted once per lane, one copy after the
+// other, each copy with its own SPIR-V values and labels; the barriers and the ifs and loops that
+// contain one (the skeleton) are emitted once, their conditions taken from lane 0 (a GCN
+// program's barriers are reached by every wave alike, so those conditions are uniform). The
+// blocks the skeleton enters start once, with a phi per lane. Lane L's arithmetic is guest
+// invocation X + L * host X's, in the same order, so the results are the same bit for bit;
+// shared memory written before a barrier is read after it, by any lane.
+class LaneTraversal {
+public:
+    LaneTraversal(EmitContext& ctx_, const IR::Program& program_)
+        : ctx{ctx_}, program{program_}, lanes{ctx_.lanes} {}
+
+    /// Whether the program can be emitted this way: no cross-invocation operations (each lane
+    /// would see only its own host invocation's lanes), and barriers only in structured code.
+    static bool Eligible(const IR::Program& program, std::string& why) {
+        for (const IR::Block* block : program.blocks) {
+            for (const IR::Inst& inst : *block) {
+                switch (inst.GetOpcode()) {
+                case IR::Opcode::LaneId:
+                case IR::Opcode::WarpId:
+                case IR::Opcode::QuadBroadcast:
+                case IR::Opcode::ReadFirstLane:
+                case IR::Opcode::ReadLane:
+                case IR::Opcode::WriteLane:
+                case IR::Opcode::Ballot:
+                case IR::Opcode::BallotFindLsb:
+                case IR::Opcode::InverseBallot:
+                case IR::Opcode::GroupAny:
+                case IR::Opcode::Discard:
+                case IR::Opcode::DiscardCond:
+                case IR::Opcode::GetExec:
+                case IR::Opcode::SetExec:
+                    why = fmt::format("{}", inst.GetOpcode());
+                    return false;
+                default:
+                    break;
+                }
+            }
+        }
+        return true;
+    }
+
+    /// Finds the skeleton; false (with the reason) when a region would leave into a skeleton
+    /// block that has phis (the copy of a lane before the last one goes on to the next copy
+    /// instead, so that block could not tell the lanes' paths apart).
+    bool Analyze(std::string& why);
+
+    void Emit() {
+        Walk();
+    }
+
+    void PatchPhis() {
+        size_t record = 0;
+        bool first = true;
+        ctx.PatchDeferredPhi([&](size_t arg, Id) {
+            if (arg == 0) {
+                record = first ? 0 : record + 1;
+                first = false;
+            }
+            ASSERT(record < phis.size());
+            const PhiRecord& phi = phis[record];
+            const IR::Value value = phi.inst->Arg(arg);
+            Id id;
+            if (value.IsImmediate()) {
+                id = ctx.Def(value);
+            } else {
+                const auto it = defs.find(value.Inst());
+                ASSERT_MSG(it != defs.end() && Sirit::ValidId(it->second[phi.lane]),
+                           "Lane phi argument without a definition");
+                id = it->second[phi.lane];
+            }
+            const IR::Block* parent = phi.inst->PhiBlock(arg);
+            Id label{};
+            if (!phi.shared) {
+                const auto it = exits[phi.lane].find(parent);
+                if (it != exits[phi.lane].end()) {
+                    label = it->second;
+                }
+            }
+            if (!Sirit::ValidId(label)) {
+                const auto it = final_exits.find(parent);
+                ASSERT_MSG(it != final_exits.end(), "Lane phi predecessor without an exit");
+                label = it->second;
+            }
+            return std::make_pair(id, label);
+        });
+    }
+
+private:
+    using Type = IR::AbstractSyntaxNode::Type;
+    struct Item {
+        enum class Kind : u8 { Label, Inst, Node };
+        Kind kind;
+        bool skeleton{};
+        IR::Block* block{};
+        IR::Inst* inst{};
+        const IR::AbstractSyntaxNode* node{};
+    };
+    struct PhiRecord {
+        IR::Inst* inst;
+        u32 lane;
+        bool shared;
+    };
+
+    static bool EmittedOnce(const IR::Inst& inst) {
+        switch (inst.GetOpcode()) {
+        case IR::Opcode::Barrier:
+        case IR::Opcode::Prologue:
+        case IR::Opcode::Epilogue:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    void FindSkeleton() {
+        IR::Block* current{};
+        for (const IR::AbstractSyntaxNode& node : program.syntax_list) {
+            if (node.type == Type::Block) {
+                current = node.data.block;
+                items.push_back({Item::Kind::Label, false, current, nullptr, nullptr});
+                for (IR::Inst& inst : current->Instructions()) {
+                    items.push_back({Item::Kind::Inst, false, current, &inst, nullptr});
+                }
+            } else {
+                items.push_back({Item::Kind::Node, false, current, nullptr, &node});
+            }
+        }
+        // Constructs: [open, close] item ranges; a loop's header is the block open at its node.
+        struct Construct {
+            size_t open, close;
+            bool loop;
+            bool skeleton;
+        };
+        std::vector<Construct> constructs;
+        std::vector<size_t> stack;
+        std::vector<size_t> loops; // construct indices
+        std::vector<size_t> break_loop(items.size(), SIZE_MAX);
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].kind != Item::Kind::Node) {
+                continue;
+            }
+            switch (items[i].node->type) {
+            case Type::If:
+            case Type::Loop:
+                stack.push_back(constructs.size());
+                if (items[i].node->type == Type::Loop) {
+                    loops.push_back(constructs.size());
+                }
+                constructs.push_back({i, 0, items[i].node->type == Type::Loop, false});
+                break;
+            case Type::EndIf:
+            case Type::Repeat:
+                ASSERT(!stack.empty());
+                constructs[stack.back()].close = i;
+                if (constructs[stack.back()].loop) {
+                    loops.pop_back();
+                }
+                stack.pop_back();
+                break;
+            case Type::Break:
+                ASSERT(!loops.empty());
+                break_loop[i] = loops.back();
+                break;
+            default:
+                break;
+            }
+        }
+        ASSERT(stack.empty());
+        // The skeleton: barriers, the ends of the program, the constructs containing them, the
+        // breaks out of skeleton loops and the constructs containing those.
+        for (Item& item : items) {
+            if (item.kind == Item::Kind::Inst && EmittedOnce(*item.inst)) {
+                item.skeleton = true;
+            }
+            if (item.kind == Item::Kind::Node &&
+                (item.node->type == Type::Return || item.node->type == Type::Unreachable)) {
+                item.skeleton = true;
+            }
+        }
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (size_t i = 0; i < items.size(); ++i) {
+                if (items[i].kind == Item::Kind::Node && items[i].node->type == Type::Break &&
+                    !items[i].skeleton && constructs[break_loop[i]].skeleton) {
+                    items[i].skeleton = changed = true;
+                }
+            }
+            for (Construct& c : constructs) {
+                if (c.skeleton) {
+                    continue;
+                }
+                for (size_t i = c.open + 1; i < c.close; ++i) {
+                    const Item& item = items[i];
+                    const bool barrier = item.kind == Item::Kind::Inst &&
+                                         item.inst->GetOpcode() == IR::Opcode::Barrier;
+                    if (barrier || (item.skeleton && item.kind == Item::Kind::Node)) {
+                        c.skeleton = changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // Blocks entered from the skeleton: they start once.
+        for (const Construct& c : constructs) {
+            if (!c.skeleton) {
+                continue;
+            }
+            items[c.open].skeleton = items[c.close].skeleton = true;
+            const auto* node = items[c.open].node;
+            if (c.loop) {
+                skeleton_blocks.insert(items[c.open].block); // header
+                skeleton_blocks.insert(node->data.loop.body);
+                skeleton_blocks.insert(node->data.loop.continue_block);
+                skeleton_blocks.insert(node->data.loop.merge);
+            } else {
+                skeleton_blocks.insert(node->data.if_node.body);
+                skeleton_blocks.insert(node->data.if_node.merge);
+            }
+        }
+        for (const Item& item : items) {
+            if (item.skeleton && item.kind == Item::Kind::Node && item.node->type == Type::Break) {
+                skeleton_blocks.insert(item.node->data.break_node.merge);
+                skeleton_blocks.insert(item.node->data.break_node.skip);
+            }
+        }
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].kind == Item::Kind::Label &&
+                (i == 0 || items[i - 1].skeleton || skeleton_blocks.contains(items[i].block))) {
+                items[i].skeleton = true;
+                skeleton_blocks.insert(items[i].block);
+            }
+        }
+    }
+
+    void SwitchLane(u32 lane) {
+        ctx.lane = lane;
+        for (auto& [inst, ids] : defs) {
+            if (Sirit::ValidId(ids[lane])) {
+                const_cast<IR::Inst*>(inst)->SetDefinition<Id>(ids[lane]);
+            }
+        }
+        for (auto& [block, ids] : labels) {
+            const_cast<IR::Block*>(block)->SetDefinition<Id>(ids[lane]);
+        }
+    }
+
+    void Record(IR::Inst* inst, u32 lane) {
+        auto& ids = defs[inst];
+        ids[lane] = inst->Definition<Id>();
+    }
+
+    /// A branch target: inside a lane copy, a skeleton block is left for the next lane's copy
+    /// (the last lane's copy goes on to it).
+    Id Target(const IR::Block* block) {
+        if (in_copy && skeleton_blocks.contains(block)) {
+            leaving = true;
+            if (ctx.lane + 1 < lanes) {
+                return copy_labels[ctx.lane + 1];
+            }
+        }
+        return block->Definition<Id>();
+    }
+
+    void CloseBlock() {
+        if (open) {
+            if (in_copy) {
+                exits[ctx.lane][open] = ctx.last_label;
+                if (leaving && ctx.lane + 1 == lanes) {
+                    final_exits[open] = ctx.last_label;
+                }
+            } else {
+                final_exits[open] = ctx.last_label;
+            }
+        }
+        open = nullptr;
+        leaving = false;
+    }
+
+    void EmitPhi(IR::Inst* inst, u32 lane, bool shared) {
+        const size_t num_args{inst->NumArgs()};
+        boost::container::small_vector<Id, 32> blocks(num_args, ctx.void_id);
+        const Id id = ctx.DeferredOpPhi(TypeId(ctx, inst->Flags<IR::Type>()),
+                                        std::span(blocks.data(), blocks.size()));
+        inst->SetDefinition<Id>(id);
+        phis.push_back({inst, lane, shared});
+        Record(inst, lane);
+    }
+
+    void EmitLabel(IR::Block* block) {
+        const Id label = block->Definition<Id>();
+        if (open) {
+            ctx.OpBranch(label);
+            CloseBlock();
+        }
+        ctx.AddLabel(label);
+        open = block;
+    }
+
+    /// A structured node, emitted in the current lane (conditions from its definitions).
+    void EmitNode(const IR::AbstractSyntaxNode& node) {
+        switch (node.type) {
+        case Type::If:
+            ctx.OpSelectionMerge(Target(node.data.if_node.merge),
+                                 spv::SelectionControlMask::MaskNone);
+            ctx.OpBranchConditional(ctx.Def(node.data.if_node.cond),
+                                    Target(node.data.if_node.body),
+                                    Target(node.data.if_node.merge));
+            CloseBlock();
+            break;
+        case Type::Loop:
+            ctx.OpLoopMerge(Target(node.data.loop.merge),
+                            Target(node.data.loop.continue_block),
+                            spv::LoopControlMask::MaskNone);
+            ctx.OpBranch(Target(node.data.loop.body));
+            CloseBlock();
+            break;
+        case Type::Break:
+            ctx.OpBranchConditional(ctx.Def(node.data.break_node.cond),
+                                    Target(node.data.break_node.merge),
+                                    Target(node.data.break_node.skip));
+            CloseBlock();
+            break;
+        case Type::EndIf:
+            if (open) {
+                ctx.OpBranch(Target(node.data.end_if.merge));
+                CloseBlock();
+            }
+            break;
+        case Type::Repeat:
+            ctx.OpBranchConditional(ctx.Def(node.data.repeat.cond),
+                                    Target(node.data.repeat.loop_header),
+                                    Target(node.data.repeat.merge));
+            CloseBlock();
+            break;
+        case Type::Return:
+            ctx.OpReturn();
+            open = nullptr;
+            break;
+        case Type::Unreachable:
+            ctx.OpUnreachable();
+            open = nullptr;
+            break;
+        case Type::Block:
+            UNREACHABLE();
+        }
+    }
+
+    /// A region: once per lane, each copy after the previous one.
+    void EmitRegion(size_t begin, size_t end) {
+        if (begin == end) {
+            return;
+        }
+        bool straight = true;
+        for (size_t i = begin; i < end; ++i) {
+            straight &= items[i].kind == Item::Kind::Inst;
+        }
+        IR::Block* const start = open;
+        for (size_t i = begin; i < end; ++i) {
+            if (items[i].kind == Item::Kind::Label) {
+                auto& ids = labels[items[i].block];
+                ids[0] = items[i].block->Definition<Id>();
+                for (u32 lane = 1; lane < lanes; ++lane) {
+                    ids[lane] = ctx.OpLabel();
+                }
+            }
+        }
+        for (u32 lane = 1; lane < lanes; ++lane) {
+            copy_labels[lane] = straight ? Id{} : ctx.OpLabel();
+        }
+        in_copy = true;
+        for (u32 lane = 0; lane < lanes; ++lane) {
+            SwitchLane(lane);
+            if (lane > 0 && !straight) {
+                // The previous copy falls through, or left for this one (Target).
+                if (open) {
+                    ctx.OpBranch(copy_labels[lane]);
+                }
+                ctx.AddLabel(copy_labels[lane]);
+                open = start;
+                leaving = false;
+            }
+            for (size_t i = begin; i < end; ++i) {
+                const Item& item = items[i];
+                switch (item.kind) {
+                case Item::Kind::Label:
+                    EmitLabel(item.block);
+                    break;
+                case Item::Kind::Inst:
+                    if (item.inst->GetOpcode() == IR::Opcode::Phi) {
+                        EmitPhi(item.inst, lane, false);
+                    } else {
+                        EmitInst(ctx, item.inst);
+                        Record(item.inst, lane);
+                    }
+                    break;
+                case Item::Kind::Node:
+                    EmitNode(*item.node);
+                    break;
+                }
+            }
+        }
+        in_copy = false;
+        SwitchLane(0);
+    }
+
+    void Walk() {
+        size_t region = 0;
+        for (size_t i = 0; i < items.size(); ++i) {
+            const Item& item = items[i];
+            if (!item.skeleton) {
+                continue;
+            }
+            EmitRegion(region, i);
+            SwitchLane(0);
+            switch (item.kind) {
+            case Item::Kind::Label: {
+                EmitLabel(item.block);
+                // Its phis: one per lane, entered from the skeleton.
+                size_t j = i + 1;
+                for (; j < items.size() && items[j].kind == Item::Kind::Inst &&
+                       items[j].inst->GetOpcode() == IR::Opcode::Phi;
+                     ++j) {
+                    for (u32 lane = 0; lane < lanes; ++lane) {
+                        EmitPhi(items[j].inst, lane, true);
+                    }
+                }
+                SwitchLane(0);
+                i = j - 1;
+                break;
+            }
+            case Item::Kind::Inst:
+                EmitInst(ctx, item.inst);
+                break;
+            case Item::Kind::Node:
+                EmitNode(*item.node);
+                break;
+            }
+            region = i + 1;
+        }
+        EmitRegion(region, items.size());
+    }
+
+    EmitContext& ctx;
+    const IR::Program& program;
+    const u32 lanes;
+    std::vector<Item> items;
+    std::unordered_set<const IR::Block*> skeleton_blocks;
+    std::unordered_map<const IR::Inst*, std::array<Id, 4>> defs;
+    std::unordered_map<const IR::Block*, std::array<Id, 4>> labels;
+    std::array<std::unordered_map<const IR::Block*, Id>, 4> exits;
+    std::unordered_map<const IR::Block*, Id> final_exits;
+    std::vector<PhiRecord> phis;
+    std::array<Id, 4> copy_labels{};
+    IR::Block* open{};
+    bool in_copy{};
+    bool leaving{};
+};
+
+bool LaneTraversal::Analyze(std::string& why) {
+    FindSkeleton();
+    const auto leaves_into_phis = [&](const IR::Block* target) {
+        return skeleton_blocks.contains(target) && !target->empty() &&
+               target->front().GetOpcode() == IR::Opcode::Phi;
+    };
+    for (const Item& item : items) {
+        if (item.kind != Item::Kind::Node || item.skeleton) {
+            continue;
+        }
+        const auto& d = item.node->data;
+        bool bad = false;
+        switch (item.node->type) {
+        case Type::If:
+            bad = leaves_into_phis(d.if_node.merge) || leaves_into_phis(d.if_node.body);
+            break;
+        case Type::EndIf:
+            bad = leaves_into_phis(d.end_if.merge);
+            break;
+        case Type::Loop:
+            bad = leaves_into_phis(d.loop.merge) || leaves_into_phis(d.loop.body) ||
+                  leaves_into_phis(d.loop.continue_block);
+            break;
+        case Type::Break:
+            bad = leaves_into_phis(d.break_node.merge) || leaves_into_phis(d.break_node.skip);
+            break;
+        case Type::Repeat:
+            bad = leaves_into_phis(d.repeat.merge) || leaves_into_phis(d.repeat.loop_header);
+            break;
+        default:
+            break;
+        }
+        if (bad) {
+            why = "a region leaves into a skeleton block with phis";
+            return false;
+        }
+    }
+    return true;
+}
+
+Id DefineMain(EmitContext& ctx, const IR::Program& program, LaneTraversal* lanes) {
     const Id void_function{ctx.TypeFunction(ctx.void_id)};
     const Id main{ctx.OpFunction(ctx.void_id, spv::FunctionControlMask::MaskNone, void_function)};
     for (IR::Block* const block : program.blocks) {
         block->SetDefinition(ctx.OpLabel());
     }
-    Traverse(ctx, program);
+    if (lanes) {
+        lanes->Emit();
+    } else {
+        Traverse(ctx, program);
+    }
     ctx.OpFunctionEnd();
     return main;
 }
@@ -410,7 +921,7 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
         // gow3 10 Nov 2026: split workgroups (WorkgroupSplitFactors, runtime_info.h). The dispatch
         // reads the split back from this LocalSize (ShaderModuleLocalSize).
         ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize,
-                             workgroup_size[0] / ctx.workgroup_split[0],
+                             workgroup_size[0] / ctx.workgroup_split[0] / ctx.lanes,
                              workgroup_size[1] / ctx.workgroup_split[1],
                              workgroup_size[2] / ctx.workgroup_split[2]);
         break;
@@ -674,11 +1185,34 @@ void PatchPhiNodes(const IR::Program& program, EmitContext& ctx) {
 std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info,
                            const IR::Program& program, Bindings& binding) {
     EmitContext ctx{profile, runtime_info, program.info, binding};
-    const Id main{DefineMain(ctx, program)};
+    // gow3 11 Nov 2026: lane coarsening (LaneTraversal).
+    std::optional<LaneTraversal> lanes;
+    if (ctx.lanes > 1) {
+        std::string why;
+        lanes.emplace(ctx, program);
+        if (!LaneTraversal::Eligible(program, why) || !lanes->Analyze(why)) {
+            std::printf("GPU: compute shader %#llx runs one invocation per thread: %s\n",
+                        static_cast<unsigned long long>(program.info.pgm_hash), why.c_str());
+            std::fflush(stdout);
+            lanes.reset();
+            ctx.lanes = 1;
+        } else {
+            std::printf("GPU: compute shader %#llx runs %u invocations per thread (%u threads)\n",
+                        static_cast<unsigned long long>(program.info.pgm_hash), ctx.lanes,
+                        runtime_info.hw.cs.workgroup_size[0] / ctx.lanes);
+            std::fflush(stdout);
+        }
+    }
+    const Id main{DefineMain(ctx, program, lanes ? &*lanes : nullptr)};
     DefineEntryPoint(program.info, ctx, main);
     SetupCapabilities(program.info, profile, runtime_info, ctx);
     SetupFloatMode(ctx, profile, runtime_info, main);
-    PatchPhiNodes(program, ctx);
+    if (lanes) {
+        lanes->PatchPhis();
+        ctx.Name(main, fmt::format("gow3_lanes_{}", ctx.lanes));
+    } else {
+        PatchPhiNodes(program, ctx);
+    }
     binding.user_data += program.info.ud_mask.NumRegs();
     return ctx.Assemble();
 }

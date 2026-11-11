@@ -24,6 +24,7 @@
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
 #include "core/memory.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/amdgpu/pm4_cmds.h"
@@ -2930,36 +2931,20 @@ static bool ClothTraceEnabled() {
 // that does not would run without a barrier after the solver (a missed hazard).
 static u32 g_cloth_epoch = 0;
 static u64 g_cloth_epoch_shader = 0;
-/// gow3 10 Nov 2026 (GOW3_PASCAL_CLOTH512=1: run it anyway, =0: skip it on every GPU): The
-/// Last of Us' cloth solver for 257-512 vertices, Cs_ClothSimulate512 (bin/shaders/bytecode of the
-/// 1.11 update, cs e44070db; a9b60b18 in the game without it), is not run on NVIDIA GPUs older
-/// than Turing (device IDs below 0x1E00: Maxwell, Pascal, Volta). On a GTX 1050 Ti (Pascal) its
-/// dispatch, one 512-thread workgroup, lost the device ("SKEDCHECK19_CTA_REGISTER_CONSUMPTION",
-/// SKED TOTAL_REGISTER_COUNT) on 17 of 18 replays of a route through Pittsburgh (Henry and Sam's
-/// first scene), on drivers 582.53 and 582.78, whatever was changed in the shader: fewer
-/// registers (544 threads, 96 a thread), LDS bounds checks, a loop cap, no driver optimization,
-/// barriers around it, the presentation on the graphics queue. Skipped, 0 of 5 replays lost it
-/// and the frames showed nothing amiss: that cloth stays with the body instead of being
-/// simulated. An RTX 5060 runs it through the same scene. The smaller variants (64, 128, 256
-/// vertices) run everywhere.
-static bool SkipPascalCloth512(const Instance& instance, u64 hash) {
-    if (hash != 0xe44070db && hash != 0xa9b60b18) {
-        return false;
-    }
-    static const bool skip = [&] {
-        const char* env = std::getenv("GOW3_PASCAL_CLOTH512");
-        const bool pre_turing =
-            instance.GetVendorID() == 0x10DE && instance.GetDeviceID() < 0x1E00;
-        const bool value = env ? env[0] == '0' : pre_turing;
-        std::printf("GPU: the cloth solver for 257-512 vertices (Cs_ClothSimulate512) %s "
-                    "(GOW3_PASCAL_CLOTH512=%s)\n",
-                    value ? "is not run: it loses the device on NVIDIA GPUs before Turing"
-                          : "runs",
-                    value ? "1: run it" : "0: skip it");
-        std::fflush(stdout);
-        return value;
-    }();
-    return skip;
+/// gow3 10 Nov 2026: The Last of Us' cloth solver for 257-512 vertices, Cs_ClothSimulate512
+/// (bin/shaders/bytecode of the 1.11 update, cs e44070db; a9b60b18 in the game without it), lost
+/// the device on NVIDIA GPUs older than Turing (device IDs below 0x1E00: Maxwell, Pascal, Volta).
+/// On a GTX 1050 Ti (Pascal) its dispatch, one 512-thread workgroup, lost the device
+/// ("SKEDCHECK19_CTA_REGISTER_CONSUMPTION", SKED TOTAL_REGISTER_COUNT) on 17 of 18 replays of a
+/// route through Pittsburgh (Henry and Sam's first scene), on drivers 582.53 and 582.78, whatever
+/// was changed in the shader: fewer registers (544 threads, 96 a thread), LDS bounds checks, a
+/// loop cap, no driver optimization, barriers around it, the presentation on the graphics queue.
+/// Skipped, 0 of 5 replays lost it and the frames showed nothing amiss: that cloth stays with the
+/// body instead of being simulated. An RTX 5060 runs it through the same scene. The smaller
+/// variants (64, 128, 256 vertices) run everywhere. 11 Nov 2026: on those GPUs it now runs as 256
+/// threads with 2 vertices each (lane_coarsening.cpp); GOW3_PASCAL_CLOTH512=skip skips it there.
+static bool SkipPascalCloth512(const Instance&, u64 hash) {
+    return Shader::Optimization::SkipLargeClothSolver(hash);
 }
 
 static bool FullBarriersEnabled() {

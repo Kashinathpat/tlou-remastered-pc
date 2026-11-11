@@ -16,9 +16,15 @@ namespace Vulkan {
 namespace {
 
 // gow3 10 Nov 2026 (ShaderModuleLocalSize): OpExecutionMode %entry LocalSize x y z.
+/// gow3 11 Nov 2026: a module emitted with lanes (LaneTraversal, emit_spirv.cpp) names its entry
+/// point "gow3_lanes_<n>": each host invocation runs n guest ones, so the guest workgroup is n
+/// times its LocalSize in X, and no split is read from it.
 std::array<u32, 3> SpirvLocalSize(std::span<const u32> code) {
+    constexpr u32 OpName = 5;
     constexpr u32 OpExecutionMode = 16;
     constexpr u32 ExecutionModeLocalSize = 17;
+    std::array<u32, 3> size{};
+    u32 lanes = 1;
     for (size_t i = 5; i < code.size();) {
         const u32 words = code[i] >> 16;
         const u32 opcode = code[i] & 0xffff;
@@ -26,11 +32,24 @@ std::array<u32, 3> SpirvLocalSize(std::span<const u32> code) {
             break;
         }
         if (opcode == OpExecutionMode && words >= 6 && code[i + 2] == ExecutionModeLocalSize) {
-            return {code[i + 3], code[i + 4], code[i + 5]};
+            size = {code[i + 3], code[i + 4], code[i + 5]};
+        }
+        if (opcode == OpName && words >= 3) {
+            const char* name = reinterpret_cast<const char*>(&code[i + 2]);
+            const size_t max = (words - 2) * sizeof(u32);
+            constexpr std::string_view prefix = "gow3_lanes_";
+            const std::string_view text{name, strnlen(name, max)};
+            if (text.starts_with(prefix)) {
+                lanes = std::max(1u, static_cast<u32>(std::atoi(text.data() + prefix.size())));
+            }
+        }
+        if (opcode == 54) { // OpFunction: no more debug names or execution modes
+            break;
         }
         i += words;
     }
-    return {};
+    size[0] *= lanes;
+    return size;
 }
 
 std::mutex g_local_size_mutex;

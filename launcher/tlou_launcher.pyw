@@ -108,6 +108,9 @@ STARTUP = [
         ("Prefetch de pipelines", "GOW3_PREFETCH_PIPELINES", "1", "0", True),
         ("Proteção da red zone", "GOW3_RED_ZONE_REWRITE", "1", "0", True),
         ("Correção da chuva branca", "GOW3_RAIN_SCALE", "0.12", "1", True),
+        # On (auto): on NVIDIA cards before Turing the largest cloth solver runs as 256 threads
+        # with 2 vertices each (lane_coarsening.cpp); off: as it is, which loses the device there.
+        ("Contorno do tecido na GTX 900/10 (evita crash)", "GOW3_PASCAL_CLOTH512", "auto", "1", True),
     ]),
 ]
 
@@ -699,6 +702,15 @@ DEBUG_TEXT = {
         'Poprawka białego deszczu',
         'Исправление белого дождя',
         '白い雨の修正'),
+    'Contorno do tecido na GTX 900/10 (evita crash)': (
+        'Cloth workaround on GTX 900/10 (avoids a crash)',
+        'Solución de la tela en GTX 900/10 (evita un cierre)',
+        'Contournement du tissu sur GTX 900/10 (évite un plantage)',
+        'Stoff-Umgehung auf GTX 900/10 (verhindert Absturz)',
+        'Aggiramento del tessuto su GTX 900/10 (evita un crash)',
+        'Obejście tkanin na GTX 900/10 (zapobiega awarii)',
+        'Обход ткани на GTX 900/10 (предотвращает вылет)',
+        'GTX 900/10 の布の回避策 (クラッシュ防止)'),
 }
 
 # Controls window: the keyboard and mouse maps the game reads from tlou.ini (key_map, mouse_map:
