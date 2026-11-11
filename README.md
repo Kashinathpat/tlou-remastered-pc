@@ -65,8 +65,13 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
 ## Requirements
 
 - Windows 10 or 11 (64-bit).
-- A CPU from Intel's 4th-generation Core (Haswell) or newer, or any AMD Ryzen: the game needs
-  AVX, F16C, BMI1, MOVBE and LZCNT.
+- A CPU with AVX, SSE4.2 and POPCNT: Intel 2nd-generation Core (Sandy Bridge) or newer, or any
+  AMD Ryzen. The game's code also uses F16C, BMI1, MOVBE and LZCNT; on CPUs older than Haswell
+  (Sandy / Ivy Bridge) those instructions are replaced by equivalent code when the game starts
+  (`gow3_pc/scripts/isa_emulation.py`, from the
+  [Sandy Bridge fork by vitolasanha](https://github.com/vitolasanha/tlou-remastered-pc-sandy-bridge-fix);
+  `TLOU_ISA_REWRITE=auto|force|off`, default auto). The first start on such a CPU takes a little
+  longer. Sandy Bridge's integrated graphics have no Vulkan, so a graphics card is needed there.
 - A graphics card or integrated GPU with Vulkan 1.3 and a current driver.
 - About 6 GB of free RAM for the game.
 
