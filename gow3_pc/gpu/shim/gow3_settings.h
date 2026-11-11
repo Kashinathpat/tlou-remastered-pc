@@ -117,6 +117,10 @@ struct Values {
     /// gow3 20 Oct 2026: mouse sensitivity while aiming (times mouse_sens) and up/down speed
     /// compared with left/right.
     std::atomic<float> mouse_aim_sens{1.0f}, mouse_vertical{1.0f};
+    /// 11 Nov 2026: the walk key (key map "walk") toggles instead of acting while held, and how
+    /// far the left stick goes while walking.
+    std::atomic<bool> walk_toggle{false};
+    std::atomic<float> walk_speed{0.5f};
     std::atomic<int> prompts{-1};
     std::atomic<unsigned> controls_generation{0};
     /// The controller shortcut for the in-game menu (GitHub #15: LT + R3 is also the sniper

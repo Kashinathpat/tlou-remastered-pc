@@ -722,7 +722,8 @@ DEBUG_TEXT = {
 # complete like the in-game menu's Controls tab. (group, [(action, label, keys only)]).
 CONTROLS = [
     ("Movimento", [("ls_up", "Andar para frente", True), ("ls_down", "Andar para trás", True),
-                   ("ls_left", "Andar para a esquerda", True), ("ls_right", "Andar para a direita", True)]),
+                   ("ls_left", "Andar para a esquerda", True), ("ls_right", "Andar para a direita", True),
+                   ("walk", "Andar devagar", True)]),
     ("Câmera", [("rs_up", "Olhar para cima", True), ("rs_down", "Olhar para baixo", True),
                 ("rs_left", "Olhar para a esquerda", True), ("rs_right", "Olhar para a direita", True)]),
     ("Botões", [("cross", "Xis (×)", False), ("circle", "Círculo (○)", False), ("square", "Quadrado (□)", False),
@@ -736,6 +737,7 @@ CONTROLS = [
 # runtime_pad.c's defaults: [(kind, name)], kind "key" (SDL scancode name) or "mouse".
 DEFAULT_CONTROLS = {
     "ls_up": [("key", "W")], "ls_down": [("key", "S")], "ls_left": [("key", "A")], "ls_right": [("key", "D")],
+    "walk": [("key", "Left Alt")],
     "rs_up": [("key", "Up")], "rs_down": [("key", "Down")], "rs_left": [("key", "Left")], "rs_right": [("key", "Right")],
     "cross": [("key", "Space")], "circle": [("key", "Left Ctrl")], "square": [("key", "F")], "triangle": [("key", "R")],
     "l1": [("key", "Q"), ("mouse", "x1")], "r1": [("key", "E"), ("mouse", "x2")], "l2": [("mouse", "right")],
@@ -812,6 +814,19 @@ CONTROL_TEXT = {
                               'W lewo', 'Влево', '左へ移動'),
     'Andar para a direita': ('Move right', 'Moverse a la derecha', 'Aller à droite', 'Nach rechts', 'Destra',
                              'W prawo', 'Вправо', '右へ移動'),
+    'Andar devagar': ('Walk', 'Caminar', 'Marcher', 'Gehen', 'Camminare', 'Chód', 'Шагом', '歩く'),
+    'Tecla de andar': ('Walk key', 'Tecla de caminar', 'Touche de marche', 'Geh-Taste', 'Tasto per camminare',
+                       'Klawisz chodu', 'Клавиша ходьбы', '歩きキー'),
+    'Segurar a tecla': ('Hold the key', 'Mantener la tecla', 'Maintenir la touche', 'Taste halten',
+                        'Tieni premuto il tasto', 'Przytrzymaj klawisz', 'Удерживать клавишу', 'キーを押し続ける'),
+    'Alternar ao apertar': ('Toggle on press', 'Alternar al pulsar', 'Basculer à chaque appui', 'Bei Druck umschalten',
+                            'Alterna alla pressione', 'Przełącz naciśnięciem', 'Переключать нажатием',
+                            '押すたびに切り替え'),
+    'Velocidade ao andar (quanto o analógico esquerdo vai)': (
+        'Walk speed (how far the left stick goes)', 'Velocidad al caminar (cuánto se mueve el stick izquierdo)',
+        'Vitesse de marche (course du stick gauche)', 'Gehtempo (wie weit der linke Stick geht)',
+        'Velocità camminando (quanto va lo stick sinistro)', 'Prędkość chodu (wychylenie lewej gałki)',
+        'Скорость шага (отклонение левого стика)', '歩く速さ (左スティックの倒し具合)'),
     'Olhar para cima': ('Look up', 'Mirar arriba', 'Regarder en haut', 'Nach oben schauen', 'Guarda su',
                         'Patrz w górę', 'Смотреть вверх', '上を見る'),
     'Olhar para baixo': ('Look down', 'Mirar abajo', 'Regarder en bas', 'Nach unten schauen', 'Guarda giù',
@@ -1983,17 +1998,56 @@ class Launcher(tk.Tk):
         window.bind("<KeyPress>", press_key)
         window.bind("<ButtonPress>", lambda e: press_mouse(MOUSE_BUTTONS.get(e.num)))
         window.bind("<MouseWheel>", lambda e: press_mouse("wheel_up" if e.delta > 0 else "wheel_down"))
+        walk_toggle, walk_speed, save_walk = self.walk_options(body)
 
         def reset():
             capture.clear()
             write_ini({"key_map": "", "mouse_map": ""})
             bindings.clear()
             bindings.update(read_controls({}))
+            walk_toggle.set(0)
+            walk_speed.set(50)
+            save_walk()
             show()
 
         self.reset_link(outer, reset)
         show()
         window.press_key, window.press_box = press_key, press_box   # (tests)
+
+    def walk_options(self, body):
+        """The walk key (runtime_pad.c "walk"): held or toggled by each press (walk_toggle), and how far
+        the left stick goes while walking (walk_speed). Returns the variables and their save."""
+        ini = read_ini()
+        try:
+            speed = round(float(ini.get("walk_speed", "0.5")) * 100)
+        except ValueError:
+            speed = 50
+        toggle = tk.IntVar(value=1 if ini.get("walk_toggle", "0") == "1" else 0)
+        speed = tk.IntVar(value=min(max(speed, 10), 100))
+        pending = []
+
+        def save():
+            write_ini({"walk_toggle": toggle.get(), "walk_speed": f"{speed.get() / 100:.2f}"})
+
+        def save_later(_=None):   # the slider writes once it rests
+            for job in pending:
+                self.after_cancel(job)
+            pending[:] = [self.after(300, save)]
+
+        self.group(body, "Tecla de andar")
+        for value, text in ((0, "Segurar a tecla"), (1, "Alternar ao apertar")):
+            tk.Radiobutton(body, text=self.debug_text(text), variable=toggle, value=value, command=save, bg=PANEL,
+                           fg=TEXT, selectcolor=BG, activebackground=PANEL, activeforeground=TEXT,
+                           font=("Segoe UI", 10), bd=0, highlightthickness=0, anchor="w").pack(anchor="w")
+        self.group(body, "Velocidade ao andar (quanto o analógico esquerdo vai)")
+        row = tk.Frame(body, bg=PANEL)
+        row.pack(anchor="w")
+        tk.Scale(row, from_=10, to=100, resolution=5, orient="horizontal", length=420, variable=speed,
+                 showvalue=False, command=save_later, bg=PANEL, fg=TEXT, troughcolor=BG, activebackground=ACCENT,
+                 highlightthickness=0, bd=0).pack(side="left")
+        tk.Label(row, textvariable=speed, width=5, anchor="e", bg=PANEL, fg=TEXT, font=("Segoe UI", 10)).pack(side="left")
+        tk.Label(row, text="%", bg=PANEL, fg=MUTED, font=("Segoe UI", 10)).pack(side="left")
+        return toggle, speed, save
 
     def mouse_tab(self, tabs):
         outer, body = self.scroll_area(tabs, self.debug_text("Mouse"), self.debug_text("Vale na próxima vez que o jogo abrir."))

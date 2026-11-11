@@ -620,6 +620,7 @@ constexpr ControlAction control_actions[] = {
     {"ls_down", "Move back", {"Left stick", "Left stick"}, true},
     {"ls_left", "Move left", {"Left stick", "Left stick"}, true},
     {"ls_right", "Move right", {"Left stick", "Left stick"}, true},
+    {"walk", "Walk (stick part way)", {"Push the stick less", "Push the stick less"}, true},
     {"rs_up", "Look up", {"Right stick", "Right stick"}, true},
     {"rs_down", "Look down", {"Right stick", "Right stick"}, true},
     {"rs_left", "Look left", {"Right stick", "Right stick"}, true},
@@ -644,8 +645,8 @@ constexpr ControlAction control_actions[] = {
 };
 constexpr int ControlCount = int(std::size(control_actions));
 // Group headings before these rows.
-constexpr std::pair<int, const char*> control_groups[] = {{0, "Movement and camera"}, {8, "Weapons (d-pad)"},
-                                                          {12, "Actions"}};
+constexpr std::pair<int, const char*> control_groups[] = {{0, "Movement and camera"}, {9, "Weapons (d-pad)"},
+                                                          {13, "Actions"}};
 
 struct ControlBinding {
     std::vector<std::string> keys; // SDL key names
@@ -821,6 +822,8 @@ void ResetControls() {
     s.mouse_vertical = 1.0f;
     s.prompts = -1;
     s.stick_speed = 1.0f;
+    s.walk_toggle = false;
+    s.walk_speed = 0.5f;
     Gow3Settings::ControlsChanged();
     dirty = true;
     ReloadControls();
@@ -1098,6 +1101,17 @@ void ControlsTab() {
         Help("Moving the mouse left turns right.");
         ImGui::PopID();
         ImGui::EndDisabled();
+        Row("Walk key toggles");
+        bool walk_toggle = s.walk_toggle;
+        if (ImGui::Checkbox("##value", &walk_toggle)) {
+            s.walk_toggle = walk_toggle;
+            changed = true;
+        }
+        Help("On: each press of the walk key (Movement and camera, below) switches walking on or off. Off: you "
+             "walk while it is held.");
+        ImGui::PopID();
+        changed |= PercentRow("Walk speed", s.walk_speed, 10, 100,
+                              "How far the left stick goes while walking, keys or controller.");
         static const char* const icon_labels[] = {"Auto (the device you use)", "Keyboard and mouse", "PlayStation",
                                                   "Xbox"};
         static const int icon_values[] = {-1, 1, 0, 2};

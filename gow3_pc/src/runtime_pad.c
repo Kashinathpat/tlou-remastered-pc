@@ -7,7 +7,8 @@
  *   R2 (fire), Space Cross (jump), Left Ctrl Circle (cover, roll), F Square (melee),
  *   R Triangle (reload, pick up), Q / mouse X1 L1, E / mouse X2 R1, Left Shift L3,
  *   V / middle mouse R3, Escape or Enter Options, Tab left touchpad, Backspace right touchpad,
- *   1 2 3 4 d-pad left right up down, mouse wheel d-pad right (up) and left (down), G shake.
+ *   1 2 3 4 d-pad left right up down, mouse wheel d-pad right (up) and left (down), G shake,
+ *   Left Alt walk (the left stick goes only part way: walk_speed; walk_toggle switches it).
  * GOW3_KEYBOARD=0 turns the keyboard off. The controls (maps, mouse on, its sensitivity and
  * vertical invert, button icons) come from the settings (gow3gpu.h Gow3Controls: the in-game
  * menu's Controls tab and the launcher's; GOW3_MOUSE=0, GOW3_MOUSE_SENS, GOW3_MOUSE_INVERT=1,
@@ -206,14 +207,17 @@ static const ButtonMap default_mouse_map={{
     {MOUSE_RIGHT,BTN_L2}, {MOUSE_LEFT,BTN_R2}, {MOUSE_MIDDLE,BTN_R3}, {MOUSE_X1,BTN_L1}, {MOUSE_X2,BTN_R1},
     {MOUSE_WHEEL_UP,BTN_RIGHT}, {MOUSE_WHEEL_DOWN,BTN_LEFT},
 },7};
-/* Keys that move a stick: ls_up ls_down ls_left ls_right (left stick), rs_* (right stick). */
-enum { LS_UP, LS_DOWN, LS_LEFT, LS_RIGHT, RS_UP, RS_DOWN, RS_LEFT, RS_RIGHT, STICK_KEYS };
-static const char *const stick_key_names[STICK_KEYS]={"ls_up","ls_down","ls_left","ls_right","rs_up","rs_down","rs_left","rs_right"};
+/* Keys that move a stick: ls_up ls_down ls_left ls_right (left stick), rs_* (right stick), and
+ * walk (11 Nov 2026: the left stick, keys or controller, goes only to walk_speed while it is
+ * held, or after a press with walk_toggle). */
+enum { LS_UP, LS_DOWN, LS_LEFT, LS_RIGHT, RS_UP, RS_DOWN, RS_LEFT, RS_RIGHT, WALK_KEY, STICK_KEYS };
+static const char *const stick_key_names[STICK_KEYS]={"ls_up","ls_down","ls_left","ls_right","rs_up","rs_down","rs_left","rs_right","walk"};
 typedef struct { struct { int source, direction; } entries[32]; size_t count; } StickKeyMap;
 static const StickKeyMap default_stick_keys={{
     {SDL_SCANCODE_W,LS_UP}, {SDL_SCANCODE_S,LS_DOWN}, {SDL_SCANCODE_A,LS_LEFT}, {SDL_SCANCODE_D,LS_RIGHT},
     {SDL_SCANCODE_UP,RS_UP}, {SDL_SCANCODE_DOWN,RS_DOWN}, {SDL_SCANCODE_LEFT,RS_LEFT}, {SDL_SCANCODE_RIGHT,RS_RIGHT},
-},8};
+    {SDL_SCANCODE_LALT,WALK_KEY},
+},9};
 /* The maps in use: the defaults with the settings' maps applied (sync_controls). */
 static ButtonMap pad_map, key_map, mouse_map;
 static StickKeyMap stick_keys;
@@ -346,7 +350,7 @@ void runtime_pad_effective_maps(const char *pad_spec, const char *key_spec, cons
 }
 
 /* The settings' controls as the pad last applied them (sync_controls). */
-static Gow3Controls controls={.mouse=1,.prompts=-1,.mouse_sens=1.0f,.stick_speed=1.0f};
+static Gow3Controls controls={.mouse=1,.prompts=-1,.mouse_sens=1.0f,.stick_speed=1.0f,.walk_speed=0.5f};
 
 static int keyboard_enabled(void) {
     static int enabled=-1;
@@ -502,15 +506,39 @@ static void sync_controls(void) {
         describe_map(&mouse_map,&stick_keys,MAP_MOUSE,text,sizeof(text));
         printf("Runtime: controls: mouse button map %s\n",text);
     }
-    printf("Runtime: controls: mouse %s (sensitivity %.2f%s), controller camera speed %.2f, button icons %d\n",
+    printf("Runtime: controls: mouse %s (sensitivity %.2f%s), controller camera speed %.2f, button icons %d, "
+           "walk key %s (stick %.2f)\n",
            controls.mouse ? "on" : "off",controls.mouse_sens,controls.mouse_invert ? ", inverted" : "",
-           controls.stick_speed,controls.prompts);
+           controls.stick_speed,controls.prompts,controls.walk_toggle ? "toggles" : "held",controls.walk_speed);
     publish_prompts();
     pad_prompts_stale=1;
 }
 
 static void key_axis(uint8_t *axis, bool negative, bool positive) {
     if (negative || positive) *axis=(uint8_t)(128-(negative ? 128 : 0)+(positive ? 127 : 0));
+}
+/* Walking: the left stick (keys and controller together) shortened to walk_speed of a full push,
+ * keeping its direction; the WASD diagonals count as a full push too. */
+static void limit_left_stick(PadData *d, float limit) {
+    const float x=(d->left_x-128)/127.5f, y=(d->left_y-128)/127.5f;
+    const float length=sqrtf(x*x+y*y);
+    if (length<=limit) return;
+    const float scale=limit/length;
+    d->left_x=(uint8_t)lrintf(128+x*scale*127.5f);
+    d->left_y=(uint8_t)lrintf(128+y*scale*127.5f);
+}
+/* Whether the walk key's limit is on: while held, or with walk_toggle switched by each press. */
+static int walk_state(bool held) {
+    static bool was_held;
+    static int toggled;
+    const bool pressed=held && !was_held;
+    was_held=held;
+    if (!controls.walk_toggle) { toggled=0; return held; }
+    if (pressed) {
+        toggled=!toggled;
+        printf("Runtime: walk %s\n",toggled ? "on" : "off");
+    }
+    return toggled;
 }
 /* The mouse: its buttons through mouse_map, its movement as the right stick. The stick follows
  * the mouse's speed (pixels per ms, smoothed over ~25 ms), starts past the games' stick dead
@@ -607,6 +635,7 @@ static void sample_host(PadData *d) {
     prompt_activity.keyboard=prompt_activity.gamepad=0;
     if (gow3gpu_overlay_captures_input()) return; /* settings menu open: neutral input */
     const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    bool walk_held=false;
     sync_controls();
     runtime_gamesettings_tick();
     publish_pad_prompts(g);
@@ -644,11 +673,13 @@ static void sample_host(PadData *d) {
         for (size_t i=0;i<key_map.count;++i) if (k[key_map.entries[i].source]) { d->buttons|=key_map.entries[i].ps; keyboard_used=1; }
         bool held[STICK_KEYS]={0};
         for (size_t i=0;i<stick_keys.count;++i) if (k[stick_keys.entries[i].source]) { held[stick_keys.entries[i].direction]=true; keyboard_used=1; }
+        walk_held=held[WALK_KEY];
         key_axis(&d->left_x,held[LS_LEFT],held[LS_RIGHT]);
         key_axis(&d->left_y,held[LS_UP],held[LS_DOWN]);
         key_axis(&d->right_x,held[RS_LEFT],held[RS_RIGHT]);
         key_axis(&d->right_y,held[RS_UP],held[RS_DOWN]);
     }
+    if (walk_state(walk_held)) limit_left_stick(d,controls.walk_speed);
     if (sample_mouse(d)) keyboard_used=1;
     if (d->buttons & BTN_L2) d->l2=255;
     __atomic_store_n(&pad_aim_held,(d->buttons & BTN_L2) || d->l2>30,__ATOMIC_RELAXED);

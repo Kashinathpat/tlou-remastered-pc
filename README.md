@@ -115,6 +115,11 @@ Share/Capture button (`GOW3_KEY_MAP` / `GOW3_PAD_MAP` `shake=...` rebind it). Th
 never flickers out by default, so it needs no shake: Celogamez's GoldHEN cheat "Flashlight Does
 Not Turn Off" (`TLOU_CHEATS=none` turns it off).
 
+**Walking on the keyboard:** Left Alt (`walk=...` in the key map) keeps the left stick, keys or
+controller, at 50% of a full push. The launcher's Controls window and the in-game menu choose
+whether the key is held or switches walking on and off, and how far the stick goes
+(`walk_toggle`, `walk_speed` in tlou.ini; `GOW3_WALK_TOGGLE`, `GOW3_WALK_SPEED`).
+
 ## Building
 
 From an MSYS2 **CLANG64** shell:

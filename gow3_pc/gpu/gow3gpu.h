@@ -67,14 +67,16 @@ void gow3gpu_prompts_set_labels(int set, const char *const *labels, int count);
 void gow3gpu_prompts_set_device(int device);
 /* Controls: the in-game menu's Controls tab and the launcher's, kept in the settings file
  * (gow3_settings.h; GOW3_PAD_MAP, GOW3_KEY_MAP, GOW3_MOUSE_MAP, GOW3_MOUSE, GOW3_MOUSE_SENS,
- * GOW3_MOUSE_INVERT, GOW3_PROMPTS and GOW3_STICK_SPEED override the file at start). The pad
- * (src/runtime_pad.c) reapplies them when the generation changes. Maps in runtime_pad.c's syntax
- * on top of its defaults ("" = the defaults). prompts: -1 auto, 0 PlayStation, 1 keyboard,
- * 2 Xbox, 3 the connected controller's. stick_speed: controller camera and aim speed. */
+ * GOW3_MOUSE_INVERT, GOW3_PROMPTS, GOW3_STICK_SPEED, GOW3_WALK_TOGGLE and GOW3_WALK_SPEED
+ * override the file at start). The pad (src/runtime_pad.c) reapplies them when the generation
+ * changes. Maps in runtime_pad.c's syntax on top of its defaults ("" = the defaults). prompts:
+ * -1 auto, 0 PlayStation, 1 keyboard, 2 Xbox, 3 the connected controller's. stick_speed:
+ * controller camera and aim speed. walk_toggle: the walk key (key map "walk") switches walking on
+ * and off instead of while held; walk_speed: how far the left stick goes while walking (0..1). */
 typedef struct {
     char pad_map[1024], key_map[2048], mouse_map[512];
-    int mouse, mouse_invert, prompts;
-    float mouse_sens, stick_speed;
+    int mouse, mouse_invert, prompts, walk_toggle;
+    float mouse_sens, stick_speed, walk_speed;
 } Gow3Controls;
 unsigned gow3gpu_controls_generation(void);
 void gow3gpu_controls_get(Gow3Controls *out);
