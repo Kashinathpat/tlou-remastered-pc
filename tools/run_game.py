@@ -49,12 +49,16 @@ def notify(message, title="The Last of Us Remastered"):
 
 def game_running():
     """The launcher refuses a second run; so does this one: two would share the same files."""
+    # Bytes, not text: tasklist writes in the console code page, which need not decode. stdin from
+    # DEVNULL: pythonw (TLOU Game.exe) has no stdin handle to give the child. stdout can still come
+    # back None under pythonw, which counts as "not running" rather than stopping the game.
     try:
         out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq gow3-probe.exe", "/NH"],
-                             capture_output=True, text=True, creationflags=0x08000000)
-        return "gow3-probe.exe" in out.stdout
-    except OSError:
+                             stdin=subprocess.DEVNULL, capture_output=True,
+                             creationflags=0x08000000)
+    except (OSError, ValueError):
         return False
+    return b"gow3-probe.exe" in (out.stdout or b"").lower()
 
 
 def python_exe():
