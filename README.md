@@ -10,11 +10,11 @@ and a Vulkan renderer (the shadPS4 video core) executes the PS4 GPU work.
 
 ## Why
 
-Why use the PS4 version instead of Windows version?
+Why The Last Of Us Remastered (PS4 version) is superior to The Last Of Us Part I (remake)?
 
 - The PS4 remaster preserves the artistic style of the PS3 version and just improves the resolution and graphics.
 - Last version with multiplayer support, having multiplayer code is much easier to implement community/unofficial multiplayer
-- Use less resources and storage space than the official PC port (1080p textures, less polygons, no ray-tracing), which has a history of performance problems and poor optimization.
+- Use less resources and storage space (no 4K textures, less polygons, no ray-tracing) than the remake version, which has a history of performance problems and poor optimization on PC.
 
 ## Status
 
