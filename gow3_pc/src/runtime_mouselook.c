@@ -1,12 +1,41 @@
-/* Mouse look handlers (see runtime_mouselook.h): hooks in the game's camera input function that
+/* Mouse look handlers (see runtime_mouselook.h): hooks in the game's camera input functions that
  * turn the camera by the mouse movement since the last frame, on the game's thread, once per
- * frame. The Last of Us Remastered's camera input function is not located yet, so there are no
- * sites: the loader installs nothing and the mouse acts as the right stick (runtime_pad.c). A
- * site's handler runs in the game's job fibers (64 KiB stacks): keep its frame small. */
+ * frame. A site's handler runs in the game's job fibers (64 KiB stacks): keep its frame small.
+ *
+ * The Last of Us Remastered 1.11 (10 Nov 2026, found by following the right stick from the pad
+ * conversion 0xa4d360 with data watchpoints, then the camera manager's virtual calls with
+ * instruction breakpoints; the same scheme as the Uncharted ports' camera hooks):
+ *  - Third-person camera: the player camera's input step 0x297440(camera, stick), called from its
+ *    update 0x2961a0 with the stick block (right stick at +8/+0xc, the raw one at +0x18/+0x1c).
+ *    Yaw: 0x298bc0(camera + 0x1d0, ...) turns the look direction at camera + 0x1e0 (sin h, 0,
+ *    cos h, 0; h in degrees, the stick's positive x lowers it) by speed * dt * stick x * scale,
+ *    with a speed ramp (+0x200 now, up to the tuning's +0x4dc and the cap +0x208) and the scale at
+ *    +0x510. Pitch: a 0..1 position on the camera's vertical curve at +0x380 (copy at +0x340),
+ *    stepped by the game's 0x754610(camera + 0x220, pitch, delta) with delta = smoothed stick y *
+ *    +0x4f0 * dt * +0x514. +0x390 holds the frame of the last stick input (the camera recentres
+ *    itself some seconds after it; +0x370 is the recentring flag the stick clears).
+ *  - Aim (strafe) camera: its controller's update 0x56b6e0(out, controller, stick, reference,
+ *    flag, direction, dt) builds the new aim direction from the current one (*direction, x y z w)
+ *    and the stick (0x56d630, curve, aim speeds at +0x138/+0x13c). The mouse turns *direction
+ *    before the controller reads it.
+ * The game's frame counter (clock at *(image + 0x156a480): +0x1c0 frame, +0x1c8 frame time) lets
+ * both cameras turn by the same mouse movement in a frame (the hidden one too, so neither jumps
+ * when the game switches between them), each camera object once per frame.
+ * GOW3_MOUSE_LOOK_DEBUG=1 logs, once a second, the cameras' headings and how much of the asked
+ * turn each kept from one call to the next. */
 #include "runtime_mouselook.h"
+#include "runtime.h"
+#include "gpu/gow3gpu.h"
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
-void runtime_mouselook_set_image(unsigned char *base) { (void)base; }
+static unsigned char *image;
+
+void runtime_mouselook_set_image(unsigned char *base) { image = base; }
 
 int runtime_mouselook_enabled(void) {
     static int enabled = -1;
@@ -19,9 +48,285 @@ int runtime_mouselook_enabled(void) {
     return enabled;
 }
 
-const MouseLookSite *runtime_mouselook_sites(unsigned *count) {
-    *count = 0;
+static int look_debug(void) {
+    static int debug = -1;
+    if (debug < 0) {
+        const char *env = getenv("GOW3_MOUSE_LOOK_DEBUG");
+        debug = env && env[0] == '1';
+    }
+    return debug;
+}
+
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/* Radians per mouse count at sensitivity 1 (the settings' mouse sensitivity scales it, live;
+ * 0.0011 rad is about 0.063 degrees: a 2,000-count swipe turns about 126 degrees). */
+static float look_scale(int aiming) {
+    const float s = gow3gpu_controls_mouse_sens();
+    const float aim = aiming ? gow3gpu_controls_mouse_aim_sens() : 1.0f;
+    return 0.0011f * (s > 0.0f ? s : 1.0f) * (aim > 0.0f ? aim : 1.0f);
+}
+static float look_invert_x(void) { return gow3gpu_controls_mouse_invert_x() ? -1.0f : 1.0f; }
+/* Up/down: the invert switch and the vertical speed (settings, Controls tab). */
+static float look_vertical(void) {
+    const float v = gow3gpu_controls_mouse_vertical();
+    return (gow3gpu_controls_mouse_invert() ? -1.0f : 1.0f) * (v > 0.0f ? v : 1.0f);
+}
+
+/* ---- The Last of Us Remastered 1.11 ---------------------------------------------------------- */
+enum {
+    TLOU_CLOCK = 0x156a480,       /* pointer to the game clock */
+    TLOU_PLAYER_OF = 0x49c630,    /* player object for a camera's player id (camera + 0xf0), or NULL */
+    TLOU_PITCH_STEP = 0x754610,   /* float step(curve, pitch, delta) */
+};
+typedef ABI void *(*TlouPlayerOf)(uint32_t id);
+typedef ABI float (*TlouPitchStep)(void *curve, float pitch, float delta);
+
+static uint32_t tlou_frame(void) {
+    const unsigned char *clock = *(unsigned char *const *)(image + TLOU_CLOCK);
+    return clock ? *(const uint32_t *)(clock + 0x1c0) : 0;
+}
+
+/* One mouse movement per game frame, shared by the cameras that run in it; each camera object
+ * turns by it at most once per frame (a frame that does not advance, as in a pause, turns
+ * nothing again). The cameras may run on different job threads: a spin lock guards this. */
+typedef struct {
+    const void *object;
+    uint32_t frame;
+} Applied;
+static volatile int frame_lock;
+static uint32_t taken_frame;
+static int taken_any, taken_valid;
+static float taken_dx, taken_dy;
+static Applied applied[8];
+static unsigned applied_next;
+
+static void lock(void) {
+    while (__atomic_exchange_n(&frame_lock, 1, __ATOMIC_ACQUIRE))
+        __builtin_ia32_pause();
+}
+static void unlock(void) { __atomic_store_n(&frame_lock, 0, __ATOMIC_RELEASE); }
+
+/* The mouse movement for this frame for the camera object; 0 when it already turned this frame,
+ * or the mouse is not captured or belongs to the stick now (runtime_pad.c). */
+static int frame_look(const void *object, uint32_t frame, float *dx, float *dy) {
+    lock();
+    if (!taken_any || frame != taken_frame) {
+        taken_valid = gow3gpu_mouse_take_look(&taken_dx, &taken_dy);
+        taken_frame = frame;
+        taken_any = 1;
+    }
+    int first = 1;
+    for (unsigned i = 0; i < sizeof(applied) / sizeof(applied[0]); ++i) {
+        if (applied[i].object == object) {
+            first = applied[i].frame != frame;
+            applied[i].frame = frame;
+            goto found;
+        }
+    }
+    applied[applied_next].object = object;
+    applied[applied_next].frame = frame;
+    applied_next = (applied_next + 1) % (sizeof(applied) / sizeof(applied[0]));
+found:
+    *dx = taken_dx;
+    *dy = taken_dy;
+    const int valid = taken_valid && first;
+    unlock();
+    return valid;
+}
+
+/* Yaw about +Y by angle (radians; positive raises the heading atan2(x, z), as a negative stick x
+ * does). */
+static void turn_xz(float *v, float angle) {
+    const float c = cosf(angle), s = sinf(angle);
+    const float x = v[0], z = v[2];
+    v[0] = x * c + z * s;
+    v[2] = z * c - x * s;
+}
+static float heading_of(const float *v) { return atan2f(v[0], v[2]) * 57.29578f; }
+static float wrap_degrees(float a) {
+    while (a > 180.0f) a -= 360.0f;
+    while (a < -180.0f) a += 360.0f;
+    return a;
+}
+
+/* Debug: how much of the last turn a camera still had at its next call (1 = all kept; the stick
+ * turns in between count too). */
+typedef struct {
+    const char *name;
+    uint64_t last;
+    unsigned calls, turns;
+    float expected, before_next, kept_sum;
+    int pending;
+} TurnDebug;
+static void turn_debug(TurnDebug *d, float heading_now, float asked_degrees, const char *extra) {
+    if (d->pending) {
+        /* heading_now includes this call's turn: take it out */
+        const float got = wrap_degrees(heading_now - asked_degrees - d->before_next);
+        if (fabsf(d->expected) > 0.05f) {
+            d->kept_sum += got / d->expected;
+            ++d->turns;
+        }
+        d->pending = 0;
+    }
+    ++d->calls;
+    const uint64_t now = now_ms();
+    if (now - d->last >= 1000) {
+        printf("Mouse look debug: %s heading %.1f, %u calls, %u turns, kept %.2f%s\n", d->name, heading_now,
+               d->calls, d->turns, d->turns ? d->kept_sum / (float)d->turns : 0.0f, extra ? extra : "");
+        fflush(stdout);
+        d->last = now;
+        d->calls = d->turns = 0;
+        d->kept_sum = 0.0f;
+    }
+    if (asked_degrees != 0.0f) {
+        /* heading_now is after the turn: the next call compares with the heading before it */
+        d->expected = asked_degrees;
+        d->before_next = wrap_degrees(heading_now - asked_degrees);
+        d->pending = 1;
+    }
+}
+
+/* Third-person camera input 0x297440(camera, stick). */
+static TurnDebug follow_debug = {.name = "camera"};
+static volatile uint64_t camera_called_ms, aim_called_ms;
+static ABI void *tlou_camera_input(unsigned char *camera, const float *stick, void *unused) {
+    (void)stick;
+    (void)unused;
+    if (!camera || !image) return NULL;
+    float *direction = (float *)(camera + 0x1e0);
+    if (!((TlouPlayerOf)(image + TLOU_PLAYER_OF))(*(const uint32_t *)(camera + 0xf0))) return NULL;
+    __atomic_store_n(&camera_called_ms, now_ms(), __ATOMIC_RELAXED);
+    const uint32_t frame = tlou_frame();
+    float dx = 0, dy = 0;
+    const int took = frame_look(camera, frame, &dx, &dy);
+    float asked = 0.0f;
+    if (took && (dx != 0.0f || dy != 0.0f)) {
+        const float per_count = look_scale(0);
+        /* the yaw lock the stick path respects (scripted moments) */
+        if (dx != 0.0f && !camera[0x1d0 + 0x28]) {
+            const float angle = -dx * per_count * look_invert_x();
+            turn_xz(direction, angle);
+            asked = angle * 57.29578f;
+        }
+        if (dy != 0.0f) {
+            const float *f = (const float *)camera;
+            /* the stick's full turn rates: yaw degrees/s, pitch curve units/s */
+            float yaw_full = f[0x4dc / 4];
+            if (f[0x208 / 4] > 0.0f && f[0x208 / 4] < yaw_full) yaw_full = f[0x208 / 4];
+            yaw_full *= f[0x510 / 4];
+            const float pitch_full = f[0x4f0 / 4] * f[0x514 / 4];
+            if (yaw_full > 1e-3f && pitch_full > 0.0f && isfinite(yaw_full) && isfinite(pitch_full)) {
+                const float delta = dy * per_count * 57.29578f * look_vertical() * (pitch_full / yaw_full);
+                float *pitch = (float *)(camera + 0x380);
+                const float next = ((TlouPitchStep)(image + TLOU_PITCH_STEP))(camera + 0x220, *pitch, delta);
+                if (isfinite(next)) {
+                    *pitch = next;
+                    *(float *)(camera + 0x340) = next;
+                }
+            }
+        }
+        /* as the stick does: no recentring for a while after input */
+        *(uint32_t *)(camera + 0x390) = frame;
+        camera[0x370] = 0;
+    }
+    if (look_debug()) turn_debug(&follow_debug, heading_of(direction), asked, NULL);
     return NULL;
+}
+
+/* Aim camera controller 0x56b6e0(out, controller, stick, direction, flag, up): the mouse turns
+ * the current direction the controller starts from (11 Nov 2026: the sixth argument is the up
+ * vector, 0 1 0; the controller measures the pitch between the two). It runs every frame, also
+ * while not aiming. Pitch stays within 80 degrees. */
+static TurnDebug aim_debug = {.name = "aim"};
+static ABI void *tlou_aim_input(void *out, unsigned char *controller, void *stick, float *direction, uint64_t flag,
+                                const float *up) {
+    (void)out;
+    (void)stick;
+    (void)flag;
+    (void)up;
+    if (!controller || !direction || !image) return NULL;
+    __atomic_store_n(&aim_called_ms, now_ms(), __ATOMIC_RELAXED);
+    float dx = 0, dy = 0;
+    const int took = frame_look(controller, tlou_frame(), &dx, &dy);
+    float asked = 0.0f;
+    char extra[64] = "";
+    if (took && (dx != 0.0f || dy != 0.0f) && isfinite(direction[0]) && isfinite(direction[1]) &&
+        isfinite(direction[2])) {
+        const float per_count = look_scale(1);
+        if (dx != 0.0f) {
+            const float angle = -dx * per_count * look_invert_x();
+            turn_xz(direction, angle);
+            asked = angle * 57.29578f;
+        }
+        if (dy != 0.0f) {
+            const float x = direction[0], y = direction[1], z = direction[2];
+            const float flat = sqrtf(x * x + z * z), length = sqrtf(x * x + y * y + z * z);
+            if (flat > 1e-4f && length > 1e-4f) {
+                float elevation = atan2f(y, flat) - dy * per_count * look_vertical();
+                const float limit = 80.0f * 0.017453292f;
+                elevation = elevation > limit ? limit : elevation < -limit ? -limit : elevation;
+                const float scale = length * cosf(elevation) / flat;
+                direction[0] = x * scale;
+                direction[2] = z * scale;
+                direction[1] = length * sinf(elevation);
+            }
+        }
+    }
+    if (look_debug()) {
+        snprintf(extra, sizeof(extra), ", elevation %.1f",
+                 atan2f(direction[1], sqrtf(direction[0] * direction[0] + direction[2] * direction[2])) * 57.29578f);
+        turn_debug(&aim_debug, heading_of(direction), asked, extra);
+    }
+    return NULL;
+}
+
+/* A camera hook ran in the last 60 ms (a frame at 20 FPS): the mouse turns the camera directly;
+ * otherwise (cutscenes, cameras without a hook) it is the right stick. */
+int runtime_mouselook_camera_recent(void) {
+    const uint64_t now = now_ms();
+    return now - __atomic_load_n(&camera_called_ms, __ATOMIC_RELAXED) < 60 ||
+           now - __atomic_load_n(&aim_called_ms, __ATOMIC_RELAXED) < 60;
+}
+
+int runtime_mouselook_aim_recent(void) {
+    return now_ms() - __atomic_load_n(&aim_called_ms, __ATOMIC_RELAXED) < 200;
+}
+
+static const MouseLookSite sites[] = {
+    {"The Last of Us Remastered (camera)",
+     0x297440,
+     6, /* push rbp; mov rbp, rsp; push r15 */
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
+      0x08, 0x01, 0x00, 0x00, 0x49, 0x89, 0xfd, 0x49},
+     24,
+     (void *)tlou_camera_input},
+    {"The Last of Us Remastered (aim camera)",
+     0x56b6e0,
+     6,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
+      0x48, 0x03, 0x00, 0x00, 0x49, 0x89, 0xf4, 0x48},
+     24,
+     (void *)tlou_aim_input},
+};
+
+const MouseLookSite *runtime_mouselook_sites(unsigned *count) {
+    const char *env = getenv("GOW3_MOUSE_LOOK_SITES"); /* debugging: a bit mask of the sites */
+    if (env && *env) {
+        static MouseLookSite chosen[sizeof(sites) / sizeof(sites[0])];
+        const unsigned long mask = strtoul(env, NULL, 0);
+        unsigned n = 0;
+        for (unsigned i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i)
+            if (mask & (1ul << i)) chosen[n++] = sites[i];
+        *count = n;
+        return chosen;
+    }
+    *count = sizeof(sites) / sizeof(sites[0]);
+    return sites;
 }
 
 /* The right stick's x and y clamps, each followed by its store (vmovss [rdi + 0x18 / 0x1c], xmm4). */

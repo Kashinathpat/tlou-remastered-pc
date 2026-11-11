@@ -38,5 +38,9 @@ typedef struct {
 const StickBoostSite *runtime_mouselook_boost_sites(unsigned *count);
 void runtime_mouselook_set_boost_slot(float *slot);
 void runtime_mouselook_set_stick_boost(float boost);
+/* A camera hook ran in the last 60 ms: the mouse turns the camera, not the stick. */
+int runtime_mouselook_camera_recent(void);
+/* The aim camera's hook ran in the last 200 ms: the mouse turns the aim directly too. */
+int runtime_mouselook_aim_recent(void);
 /* runtime_pad.c: the aim button (L2) was held at the last pad read. */
 int runtime_pad_aim_held(void);

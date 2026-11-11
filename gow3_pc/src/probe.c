@@ -215,13 +215,17 @@ static LONG watch_hit(EXCEPTION_POINTERS *info) {
     /* Instruction breakpoints (GOW3_EXEC_WATCH) fault before the instruction: resume past them. */
     c->EFlags|=0x10000;
     /* Only guest code is logged: runtime copies of the watched memory would fill the 400 lines. */
-    if (image && c->Rip-(uintptr_t)image<0x2000000 && InterlockedIncrement(&hits)<=400) {
-        char line[1024], s1[64], s2[64];
+    /* GOW3_WATCH_HITS: lines to log (default 400). */
+    static LONG max_hits;
+    if (!max_hits) { const char *e=getenv("GOW3_WATCH_HITS"); LONG v=e ? atol(e) : 0; max_hits=v>0 ? v : 400; }
+    if (image && c->Rip-(uintptr_t)image<0x2000000 && InterlockedIncrement(&hits)<=max_hits) {
+        char line[1400], s1[64], s2[64];
         watch_string(s1,sizeof(s1),c->Rsi); watch_string(s2,sizeof(s2),c->Rdx);
-        int n=snprintf(line,sizeof(line),"Watch: dr6 %#llx rip guest %#llx rax %#llx rcx %#llx rdx %#llx rsi %#llx rdi %#llx r8 %#llx r9 %#llx [rsi '%s'] [rdx '%s'] callers",
+        int n=snprintf(line,sizeof(line),"Watch: dr6 %#llx rip guest %#llx rax %#llx rcx %#llx rdx %#llx rsi %#llx rdi %#llx r8 %#llx r9 %#llx rbx %#llx r12 %#llx r13 %#llx r14 %#llx r15 %#llx [rsi '%s'] [rdx '%s'] callers",
                        (unsigned long long)dr6,(unsigned long long)(c->Rip-(uintptr_t)image),(unsigned long long)c->Rax,
                        (unsigned long long)c->Rcx,(unsigned long long)c->Rdx,(unsigned long long)c->Rsi,(unsigned long long)c->Rdi,
-                       (unsigned long long)c->R8,(unsigned long long)c->R9,s1,s2);
+                       (unsigned long long)c->R8,(unsigned long long)c->R9,(unsigned long long)c->Rbx,(unsigned long long)c->R12,
+                       (unsigned long long)c->R13,(unsigned long long)c->R14,(unsigned long long)c->R15,s1,s2);
         const uint64_t *stack=(const uint64_t *)(uintptr_t)c->Rsp;
         for (int i=0,found=0;i<64 && found<6 && n<(int)sizeof(line)-24;++i) {
             uint64_t v=stack[i];
