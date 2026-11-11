@@ -40,13 +40,14 @@ done
 cp -r gow3_pc/out/pydeps/iced_x86 gow3_pc/out/pydeps/iced_x86-*.dist-info "$stage/gow3_pc/out/pydeps/"
 rm -rf -- "$stage/gow3_pc/out/pydeps/iced_x86/__pycache__"   # (paths of this machine)
 cp gow3_pc/scripts/*.py "$stage/gow3_pc/scripts/"
-cp tools/probe_tlou.py tools/run_game.py "$stage/tools/"
-cp launcher/tlou_launcher.pyw "$stage/launcher/"
+cp tools/probe_tlou.py tools/run_game.py tools/apply_update.py "$stage/tools/"
+cp launcher/tlou_launcher.pyw launcher/updater.py "$stage/launcher/"
 # The starter, without the icon: the icon is the game's cover.
 clang -O2 -Wall -Wextra -Werror -static -municode -mwindows launcher/tlou-launcher.c \
     -o "$stage/TLOU Launcher.exe"
 clang -O2 -Wall -Wextra -Werror -static -municode -mwindows launcher/tlou-game.c \
     -o "$stage/TLOU Game.exe"
+# The package's version: the launcher's updates (launcher/updater.py) compare it with the releases.
 cp tools/VERSION "$stage/VERSION"
 cp gow3_pc/packaging/windows/README-player.txt "$stage/README.txt"
 cp gow3_pc/LICENSE "$stage/LICENSE.txt"

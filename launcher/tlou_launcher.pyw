@@ -16,6 +16,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import updater  # noqa: E402  (launcher/updater.py: updates from the GitHub releases)
 ROOT = HERE.parent
 ICON = HERE / "assets/icon.ico"   # made from the player's own picture, not in the repository
 GAME_ICON = "sce_sys/icon0.png"   # without it, the icon of the player's own dump, read at run time
@@ -1096,6 +1098,63 @@ CLEAR_TABLE = {
 }
 for _code, _values in CLEAR_TABLE.items():
     TEXTS[_code].update(zip(CLEAR_KEYS, _values))
+# Updates from the GitHub releases (launcher/updater.py): {} is the version, then the size in MB.
+UPDATE_KEYS = "update_button update_available update_confirm update_downloading update_installing update_failed update_close_game".split()
+UPDATE_TABLE = {
+    "pt": ["ATUALIZAR PARA {}", "Versão {} disponível. Saves e configurações são mantidos.",
+           "Instalar a versão {} (download de {} MB)?\n\nSaves, configurações e o cache de shaders são mantidos. "
+           "O launcher fecha, instala a atualização e abre de novo.",
+           "Baixando a atualização... {}", "Instalando a atualização...",
+           "Não foi possível atualizar. A versão instalada continua a mesma.\n\n{}", "Feche o jogo antes de atualizar."],
+    "en": ["UPDATE TO {}", "Version {} is available. Saves and settings are kept.",
+           "Install version {} ({} MB download)?\n\nSaves, settings and the shader cache are kept. "
+           "The launcher closes, installs the update and opens again.",
+           "Downloading the update... {}", "Installing the update...",
+           "The update could not be installed. The installed version is unchanged.\n\n{}", "Close the game before updating."],
+    "es": ["ACTUALIZAR A {}", "Versión {} disponible. Se conservan partidas y ajustes.",
+           "¿Instalar la versión {} (descarga de {} MB)?\n\nSe conservan las partidas, los ajustes y la caché de shaders. "
+           "El launcher se cierra, instala la actualización y se abre de nuevo.",
+           "Descargando la actualización... {}", "Instalando la actualización...",
+           "No se pudo actualizar. La versión instalada no cambia.\n\n{}", "Cierra el juego antes de actualizar."],
+    "fr": ["METTRE À JOUR EN {}", "Version {} disponible. Sauvegardes et réglages conservés.",
+           "Installer la version {} (téléchargement de {} Mo) ?\n\nLes sauvegardes, les réglages et le cache des shaders "
+           "sont conservés. Le launcher se ferme, installe la mise à jour et se rouvre.",
+           "Téléchargement de la mise à jour... {}", "Installation de la mise à jour...",
+           "La mise à jour n'a pas pu être installée. La version installée reste inchangée.\n\n{}",
+           "Fermez le jeu avant la mise à jour."],
+    "de": ["AUF {} AKTUALISIEREN", "Version {} ist verfügbar. Spielstände und Einstellungen bleiben erhalten.",
+           "Version {} installieren ({} MB Download)?\n\nSpielstände, Einstellungen und der Shader-Cache bleiben erhalten. "
+           "Der Launcher schließt sich, installiert das Update und startet neu.",
+           "Update wird heruntergeladen... {}", "Update wird installiert...",
+           "Das Update konnte nicht installiert werden. Die installierte Version bleibt unverändert.\n\n{}",
+           "Schließe das Spiel vor dem Update."],
+    "it": ["AGGIORNA A {}", "Versione {} disponibile. Salvataggi e impostazioni vengono mantenuti.",
+           "Installare la versione {} (download di {} MB)?\n\nSalvataggi, impostazioni e cache degli shader vengono "
+           "mantenuti. Il launcher si chiude, installa l'aggiornamento e si riapre.",
+           "Download dell'aggiornamento... {}", "Installazione dell'aggiornamento...",
+           "Impossibile installare l'aggiornamento. La versione installata non cambia.\n\n{}",
+           "Chiudi il gioco prima di aggiornare."],
+    "pl": ["AKTUALIZUJ DO {}", "Dostępna wersja {}. Zapisy i ustawienia zostaną zachowane.",
+           "Zainstalować wersję {} (pobieranie {} MB)?\n\nZapisy, ustawienia i pamięć podręczna shaderów zostaną "
+           "zachowane. Launcher zamknie się, zainstaluje aktualizację i uruchomi ponownie.",
+           "Pobieranie aktualizacji... {}", "Instalowanie aktualizacji...",
+           "Nie udało się zainstalować aktualizacji. Zainstalowana wersja się nie zmienia.\n\n{}",
+           "Zamknij grę przed aktualizacją."],
+    "ru": ["ОБНОВИТЬ ДО {}", "Доступна версия {}. Сохранения и настройки останутся.",
+           "Установить версию {} (загрузка {} МБ)?\n\nСохранения, настройки и кэш шейдеров останутся. "
+           "Лаунчер закроется, установит обновление и откроется снова.",
+           "Загрузка обновления... {}", "Установка обновления...",
+           "Не удалось установить обновление. Установленная версия не изменилась.\n\n{}",
+           "Закройте игру перед обновлением."],
+    "ja": ["{} に更新", "バージョン {} が利用可能です。セーブと設定は保持されます。",
+           "バージョン {} をインストールしますか?({} MB のダウンロード)\n\nセーブ、設定、シェーダーキャッシュは保持されます。"
+           "ランチャーは閉じてアップデートをインストールし、再び開きます。",
+           "アップデートをダウンロード中... {}", "アップデートをインストール中...",
+           "アップデートをインストールできませんでした。インストール済みのバージョンは変わりません。\n\n{}",
+           "アップデートの前にゲームを閉じてください。"],
+}
+for _code, _values in UPDATE_TABLE.items():
+    TEXTS[_code].update(zip(UPDATE_KEYS, _values))
 
 BG, PANEL, TEXT, MUTED, ACCENT, ACCENT_HOT = "#090909", "#141414", "#ece9e2", "#8f8f88", "#c8862a", "#e4a23f"
 DISABLED, ERROR = "#2b2b2b", "#e06c5a"
@@ -1426,8 +1485,14 @@ class Launcher(tk.Tk):
         self.set_icon()
         self.style()
         self.ready_message = None
+        # Updates: a newer release (looked for at every start) shows the update button beside PLAY.
+        self.update_release = None
+        self.update_busy = False
+        self.update_note = None   # (text key, values) of the status line: an update found or on its way
         self.build()
         self.refresh()
+        self.after(3000, lambda: threading.Thread(target=updater.cleanup, args=(ROOT,), daemon=True).start())
+        self.after(1000, self.check_updates)
 
     def set_icon(self):
         """The window's icon, also for the windows opened from this one."""
@@ -1501,6 +1566,11 @@ class Launcher(tk.Tk):
                                      activebackground=ACCENT_HOT, activeforeground=BG, bd=0, relief="flat",
                                      font=("Segoe UI Semibold", 15), cursor="hand2", disabledforeground="#77756f")
         self.play_button.place(x=self.WIDTH - 300, y=self.HEIGHT - 88, width=256, height=52)
+        # Placed beside PLAY only once a newer release is found (sync_update_button).
+        self.update_button = tk.Button(self, command=self.install_update, bg=PANEL, fg=ACCENT, activebackground="#222",
+                                       activeforeground=ACCENT_HOT, bd=0, relief="flat", font=("Segoe UI Semibold", 10),
+                                       cursor="hand2", disabledforeground="#77756f", wraplength=170)
+        self.sync_update_button()
         # Above the button, wrapped to its width: the line below it holds the links.
         self.status = canvas.create_text(self.WIDTH - 300, self.HEIGHT - 96, anchor="sw", width=256, fill=MUTED,
                                          font=("Segoe UI", 9))
@@ -1603,9 +1673,15 @@ class Launcher(tk.Tk):
         if self.ready_message:
             self.canvas.itemconfigure(self.status, text=self.ready_message, fill=ERROR)
             self.play_button.config(state="disabled", text=self.t("play"), bg=DISABLED)
+        elif self.update_busy and self.update_note:
+            self.canvas.itemconfigure(self.status, text=self.note(), fill=MUTED)
+            self.play_button.config(state="disabled", text=self.t("play"), bg=DISABLED)
         elif running:
             self.canvas.itemconfigure(self.status, text=self.t("running").capitalize(), fill=MUTED)
             self.play_button.config(state="disabled", text=self.t("running"), bg=DISABLED)
+        elif self.update_note:
+            self.canvas.itemconfigure(self.status, text=self.note(), fill=ACCENT)
+            self.play_button.config(state="normal", text=self.t("play"), bg=ACCENT)
         else:
             self.canvas.itemconfigure(self.status, text=self.t("ready"), fill=MUTED)
             self.play_button.config(state="normal", text=self.t("play"), bg=ACCENT)
@@ -1621,6 +1697,100 @@ class Launcher(tk.Tk):
             self.process = subprocess.Popen(
                 game_command(python_exe(), self.folders, self.seconds), cwd=ROOT, env=env,
                 stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, creationflags=0x08000000)
+
+    def note(self):
+        key, *values = self.update_note
+        return self.t(key).format(*values)
+
+    def check_updates(self):
+        """Looks for a newer release in the background; a copy run from the source tree (no VERSION)
+        is never updated. Offline or GitHub's rate limit: nothing is shown."""
+        current = updater.installed_version(ROOT)
+        if current is None or self.update_busy:
+            return
+        result = []
+
+        def work():
+            try:
+                result.append(updater.latest_release(current))
+            except Exception:   # offline, rate limit, a bad answer: try again next start
+                result.append(None)
+
+        def done():
+            if not result:
+                self.after(250, done)
+                return
+            if result[0] and not self.update_busy:
+                self.update_release = result[0]
+                self.update_note = ("update_available", updater.version_text(result[0]["version"]))
+                self.sync_update_button()
+                self.show_state(self.process is not None and self.process.poll() is None)
+        threading.Thread(target=work, daemon=True).start()
+        self.after(250, done)
+
+    def sync_update_button(self):
+        """Shows the update button beside PLAY once a newer release was found (also after build())."""
+        if not self.update_release:
+            self.update_button.place_forget()
+            return
+        self.update_button.config(text=self.t("update_button").format(updater.version_text(self.update_release["version"])),
+                                  state="disabled" if self.update_busy else "normal")
+        self.update_button.place(x=self.WIDTH - 300 - 192, y=self.HEIGHT - 88, width=180, height=52)
+
+    def install_update(self):
+        release = self.update_release
+        if not release or self.update_busy:
+            return
+        if self.process is not None and self.process.poll() is None or game_running():
+            messagebox.showinfo(self.title(), self.t("update_close_game"), parent=self)
+            return
+        version = updater.version_text(release["version"])
+        if not messagebox.askyesno(self.title(), self.t("update_confirm").format(version, round(release["size"] / 1e6))
+                                   + f"\n\n{release['page']}", parent=self):
+            return
+        self.save()   # settings live in analysis/, which the update never touches
+        self.update_busy = True
+        self.update_note = ("update_downloading", "0%")
+        self.sync_update_button()
+        self.show_state(False)
+        state = {"progress": (0, release["size"]), "error": None, "staged": None}
+
+        def progress(done, total):
+            state["progress"] = (done, total)
+
+        def work():
+            try:
+                archive = updater.download(release, ROOT, progress)
+                state["staged"] = updater.stage(archive, ROOT, release["version"])
+            except Exception as error:
+                state["error"] = str(error) or error.__class__.__name__
+
+        def tick():
+            if state["error"]:
+                self.update_busy = False
+                self.update_note = ("update_available", version)
+                self.sync_update_button()
+                self.show_state(False)
+                messagebox.showerror(self.title(), self.t("update_failed").format(state["error"]), parent=self)
+                return
+            if state["staged"]:
+                self.update_note = ("update_installing",)
+                self.show_state(False)
+                try:
+                    updater.start_apply(ROOT, state["staged"])
+                except OSError as error:
+                    state["error"] = str(error)
+                    tick()
+                    return
+                self.destroy()   # apply_update.py waits for this process to exit
+                return
+            done, total = state["progress"]
+            self.update_note = ("update_downloading", f"{100 * done / total:.0f}%" if total else f"{done / 1e6:.0f} MB")
+            self.show_state(False)
+            self.after(200, tick)
+
+        threading.Thread(target=work, daemon=True).start()
+        self.after(200, tick)
 
     def open_debug(self):
         if self.debug_window is not None and self.debug_window.winfo_exists():

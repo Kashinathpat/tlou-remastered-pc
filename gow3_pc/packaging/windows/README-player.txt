@@ -19,8 +19,9 @@ do jogo: use-o para abrir o launcher, e copie-o para onde quiser. Também é pos
 "TLOU Game.exe" para iniciar diretamente com as últimas configurações salvas no launcher.
 
 Se o jogo oscilar, teste o limite de 30 FPS no launcher: o movimento fica mais regular.
-Saves, configurações e logs ficam em analysis\ dentro desta pasta. Ao atualizar o port,
-guarde essa pasta. O log é analysis\tlou\boot.log (botão "Abrir log").
+Saves, configurações e logs ficam em analysis\ dentro desta pasta. Ao abrir, o launcher procura
+uma versão nova do port; se houver, o botão ATUALIZAR baixa e instala sem mexer em analysis\.
+Ao atualizar à mão, guarde essa pasta. O log é analysis\tlou\boot.log (botão "Abrir log").
 
 ENGLISH
 
@@ -40,7 +41,9 @@ here: use it to open the launcher, and copy it wherever you like. You can also o
 "TLOU Game.exe" to start directly with the settings last saved in the launcher.
 
 If the frame rate swings, try the 30 FPS limit in the launcher: motion gets more even.
-Saves, settings and logs are in analysis\ inside this folder. Keep it when you update the port.
+Saves, settings and logs are in analysis\ inside this folder. When it opens, the launcher looks
+for a new version of the port; if there is one, the UPDATE button downloads and installs it
+without touching analysis\. Keep that folder when you update by hand.
 The log is analysis\tlou\boot.log ("Open log").
 
 Not affiliated with Sony, Naughty Dog or any other rights holder.
