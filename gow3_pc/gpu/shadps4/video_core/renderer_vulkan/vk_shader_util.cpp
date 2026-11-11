@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "common/assert.h"
@@ -11,6 +14,27 @@
 namespace Vulkan {
 
 namespace {
+
+// gow3 10 Nov 2026 (ShaderModuleLocalSize): OpExecutionMode %entry LocalSize x y z.
+std::array<u32, 3> SpirvLocalSize(std::span<const u32> code) {
+    constexpr u32 OpExecutionMode = 16;
+    constexpr u32 ExecutionModeLocalSize = 17;
+    for (size_t i = 5; i < code.size();) {
+        const u32 words = code[i] >> 16;
+        const u32 opcode = code[i] & 0xffff;
+        if (words == 0 || i + words > code.size()) {
+            break;
+        }
+        if (opcode == OpExecutionMode && words >= 6 && code[i + 2] == ExecutionModeLocalSize) {
+            return {code[i + 3], code[i + 4], code[i + 5]};
+        }
+        i += words;
+    }
+    return {};
+}
+
+std::mutex g_local_size_mutex;
+std::unordered_map<VkShaderModule, std::array<u32, 3>> g_local_size;
 
 // gow3 21 Oct 2026, diagnostics (GOW3_INVARIANT_POSITION=1, off by default): the games draw
 // depth first and then shade with depth test EQUAL, which needs every vertex shader to compute
@@ -103,7 +127,24 @@ vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
     auto [module_result, module] = device.createShaderModule(shader_info);
     ASSERT_MSG(module_result == vk::Result::eSuccess, "Failed to compile SPIR-V shader: {}",
                vk::to_string(module_result));
+    // Every module is recorded (or its entry dropped): a handle the driver reuses after a module
+    // was destroyed never keeps the old module's size.
+    const auto local_size = SpirvLocalSize(code);
+    {
+        std::scoped_lock lock{g_local_size_mutex};
+        if (local_size[0]) {
+            g_local_size[static_cast<VkShaderModule>(module)] = local_size;
+        } else {
+            g_local_size.erase(static_cast<VkShaderModule>(module));
+        }
+    }
     return module;
+}
+
+std::array<u32, 3> ShaderModuleLocalSize(vk::ShaderModule module) {
+    std::scoped_lock lock{g_local_size_mutex};
+    const auto it = g_local_size.find(static_cast<VkShaderModule>(module));
+    return it != g_local_size.end() ? it->second : std::array<u32, 3>{};
 }
 
 } // namespace Vulkan

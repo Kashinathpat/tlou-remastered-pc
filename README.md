@@ -31,12 +31,16 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     after the quarantine zone, cannot be shot down for that reason. Ruled out so far: the
     renderer's CPU/GPU data exchange, the port's patches and red-zone protection, and the CPU's
     approximate math instructions.
-  - Moving into a new part of a level could lose the Vulkan device: the runtime stopped with
-    `Device lost during submit`. It comes from the two-stage draw pipeline (draw recording
-    thread), now off by default: on a save that reproduced it 70-160 s into play in 9 of 10 runs,
-    2 runs of 2 without it went past that point, at the same frame rate there (~46-50 FPS).
-    Where in the pipeline the fault lies is not found yet; "Draw pipeline" in the launcher's
-    Startup tab (`GOW3_DRAW_PIPE=1`) turns it back on.
+  - On NVIDIA graphics cards older than Turing (GTX 900 and 10 series), the game's cloth solver for
+    its largest cloths (`Cs_ClothSimulate512`) lost the Vulkan device in Pittsburgh, once Henry and
+    Sam appear: the runtime stopped with `Device lost during submit`, and Windows' System event log
+    shows `nvlddmkm` "SKEDCHECK19_CTA_REGISTER_CONSUMPTION failed". A replay of that route lost it
+    on 17 of 18 runs, on drivers 582.53 and 582.78, whatever was changed in the shader. On those
+    cards the solver is not run, and that cloth follows the body instead of being simulated: 0
+    device losses in 9 runs, nothing amiss in the frames compared (`GOW3_PASCAL_CLOTH512=1` runs it
+    anyway). Newer cards run it (an RTX 5060 went through the same scene). The two-stage draw
+    pipeline, blamed before, made the loss more frequent but was not its cause, and is on again
+    ("Draw pipeline" in the launcher's Startup tab, `GOW3_DRAW_PIPE=0` turns it off).
   - Soft shadows can look detached from objects, with a thin light outline around them and little
     darkening where they touch the ground, most visibly under vehicle wheels. The same spot on a
     PS4 has the contact darkening this port misses, so it is a port bug; the pass that draws it
@@ -124,6 +128,8 @@ in `launcher/assets/icon.ico` (not in the repository).
 | `tools/package_windows.sh` | The Windows release zip. |
 | `tools/probe_tlou.py` | Prepares the game's executable (with its update) and starts the runtime with this game's settings. |
 | `tools/tlou_pad.py`, `tools/tlou_bench.py` | Scripted controller input, frame captures and analysis; a repeatable frame rate measurement on a test profile. |
+| `tools/tlou_replay.py`, `tools/tlou_compare_shots.py` | A recorded route replayed on a copy of the player's saves, reporting a lost device, with frames saved at the same moments (and two runs' frames compared). |
+| `tools/tlou_find_shader.py` | The game file a shader comes from, by the hash the logs name it by (or shaders by file name). |
 | `tools/decode_dump.py`, other `tools/` | Image dump decoding and other diagnostics. |
 | `tools/install_update.py` | Unpacks an update PKG next to the game folder (PkgTool, `tools/pkgtool`). |
 

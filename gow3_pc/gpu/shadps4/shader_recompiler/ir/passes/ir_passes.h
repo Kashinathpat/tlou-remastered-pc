@@ -43,6 +43,11 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
                              const Profile& profile);
 /// gow3: whether the shader gets LDS barriers for groups of several waves on 32-lane subgroups.
 bool MultiwaveLdsBarriers(u64 pgm_hash);
+/// gow3 10 Nov 2026 (from BilalReloaded's port 0.8.4): LDS accesses bounds-checked like the PS4
+/// (shared_memory_bounds_pass.cpp). GOW3_LDS_BOUNDS=0: off.
+void SharedMemoryBoundsPass(IR::Program& program, const RuntimeInfo& runtime_info,
+                            const Profile& profile);
+bool SharedMemoryBounds(u64 pgm_hash);
 void SharedMemorySimplifyPass(IR::Program& program, const Profile& profile);
 void SharedMemoryToStoragePass(IR::Program& program, const RuntimeInfo& runtime_info,
                                const Profile& profile);

@@ -179,6 +179,28 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
         }
     }
 
+    // gow3 10 Nov 2026 (from SuperMedo 031baf5; WorkgroupSplitFactors in runtime_info.h): workgroups
+    // whose threads share nothing may run as smaller ones. Any shared memory access (also a
+    // shared atomic), workgroup barrier, LDS turned into a storage buffer, wave64 scratch or
+    // workgroup index rules it out.
+    if (info.sw_stage == SwStage::Compute) {
+        bool shares = info.shared_types != IR::Type::Void || info.shared_memory_scratch_size != 0 ||
+                      info.loads.GetAny(IR::Attribute::WorkgroupIndex);
+        for (const auto& buffer : info.buffers) {
+            shares |= buffer.buffer_type == BufferType::SharedMemory;
+        }
+        for (IR::Block* const block : program.post_order_blocks) {
+            for (IR::Inst& inst : block->Instructions()) {
+                const auto op = inst.GetOpcode();
+                shares |= op == IR::Opcode::Barrier || op == IR::Opcode::WorkgroupMemoryBarrier ||
+                          IR::NameOf(op).find("Shared") != std::string_view::npos;
+            }
+        }
+        info.cs_split_eligible = !shares;
+    } else {
+        info.cs_split_eligible = false;
+    }
+
     if (!EmulatorSettings.IsDirectMemoryAccessEnabled()) {
         info.uses_dma = false;
         info.readconst_types = Info::ReadConstType::None;

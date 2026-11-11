@@ -316,8 +316,32 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
         Common::FS::GetUserPathString(Common::FS::PathType::LogDir);
     const char* log_path = crash_diagnostic_path.c_str();
     vk::Bool32 enable_force_barriers = vk::True;
+    // gow3 10 Nov 2026: thread safety stays on; GOW3_VK_VALIDATION_CORE=0 turns the other checks
+    // off with the core ones.
+    vk::Bool32 enable_threads = vk::True;
 
     const std::array layer_setings = {
+        vk::LayerSettingEXT{
+            .pLayerName = VALIDATION_LAYER_NAME,
+            .pSettingName = "thread_safety",
+            .type = vk::LayerSettingTypeEXT::eBool32,
+            .valueCount = 1,
+            .pValues = &enable_threads,
+        },
+        vk::LayerSettingEXT{
+            .pLayerName = VALIDATION_LAYER_NAME,
+            .pSettingName = "stateless_param",
+            .type = vk::LayerSettingTypeEXT::eBool32,
+            .valueCount = 1,
+            .pValues = &enable_core,
+        },
+        vk::LayerSettingEXT{
+            .pLayerName = VALIDATION_LAYER_NAME,
+            .pSettingName = "object_lifetime",
+            .type = vk::LayerSettingTypeEXT::eBool32,
+            .valueCount = 1,
+            .pValues = &enable_core,
+        },
         vk::LayerSettingEXT{
             .pLayerName = VALIDATION_LAYER_NAME,
             .pSettingName = "validate_core",

@@ -2930,6 +2930,38 @@ static bool ClothTraceEnabled() {
 // that does not would run without a barrier after the solver (a missed hazard).
 static u32 g_cloth_epoch = 0;
 static u64 g_cloth_epoch_shader = 0;
+/// gow3 10 Nov 2026 (GOW3_PASCAL_CLOTH512=1: run it anyway, =0: skip it on every GPU): The
+/// Last of Us' cloth solver for 257-512 vertices, Cs_ClothSimulate512 (bin/shaders/bytecode of the
+/// 1.11 update, cs e44070db; a9b60b18 in the game without it), is not run on NVIDIA GPUs older
+/// than Turing (device IDs below 0x1E00: Maxwell, Pascal, Volta). On a GTX 1050 Ti (Pascal) its
+/// dispatch, one 512-thread workgroup, lost the device ("SKEDCHECK19_CTA_REGISTER_CONSUMPTION",
+/// SKED TOTAL_REGISTER_COUNT) on 17 of 18 replays of a route through Pittsburgh (Henry and Sam's
+/// first scene), on drivers 582.53 and 582.78, whatever was changed in the shader: fewer
+/// registers (544 threads, 96 a thread), LDS bounds checks, a loop cap, no driver optimization,
+/// barriers around it, the presentation on the graphics queue. Skipped, 0 of 5 replays lost it
+/// and the frames showed nothing amiss: that cloth stays with the body instead of being
+/// simulated. An RTX 5060 runs it through the same scene. The smaller variants (64, 128, 256
+/// vertices) run everywhere.
+static bool SkipPascalCloth512(const Instance& instance, u64 hash) {
+    if (hash != 0xe44070db && hash != 0xa9b60b18) {
+        return false;
+    }
+    static const bool skip = [&] {
+        const char* env = std::getenv("GOW3_PASCAL_CLOTH512");
+        const bool pre_turing =
+            instance.GetVendorID() == 0x10DE && instance.GetDeviceID() < 0x1E00;
+        const bool value = env ? env[0] == '0' : pre_turing;
+        std::printf("GPU: the cloth solver for 257-512 vertices (Cs_ClothSimulate512) %s "
+                    "(GOW3_PASCAL_CLOTH512=%s)\n",
+                    value ? "is not run: it loses the device on NVIDIA GPUs before Turing"
+                          : "runs",
+                    value ? "1: run it" : "0: skip it");
+        std::fflush(stdout);
+        return value;
+    }();
+    return skip;
+}
+
 static bool FullBarriersEnabled() {
     static const bool enabled = [] {
         const char* env = std::getenv("GOW3_FULL_BARRIERS");
@@ -2955,6 +2987,7 @@ namespace {
 struct TracedDispatch {
     u64 serial, hash, tick;
     u32 dim[3];
+    u32 lds; ///< gow3 10 Nov 2026: the guest's LDS size of the dispatch (bytes)
     u32 count;
     struct {
         u64 address;
@@ -2990,9 +3023,9 @@ void DumpTracedDispatches() {
     for (u64 serial = last > traced_dispatches.size() ? last - traced_dispatches.size() : 0;
          serial < last; ++serial) {
         const auto& d = traced_dispatches[serial % traced_dispatches.size()];
-        std::fprintf(stderr, "  #%llu shader %#llx tick %llu groups %ux%ux%u:",
+        std::fprintf(stderr, "  #%llu shader %#llx tick %llu groups %ux%ux%u lds %u:",
                      static_cast<unsigned long long>(d.serial), static_cast<unsigned long long>(d.hash),
-                     static_cast<unsigned long long>(d.tick), d.dim[0], d.dim[1], d.dim[2]);
+                     static_cast<unsigned long long>(d.tick), d.dim[0], d.dim[1], d.dim[2], d.lds);
         for (u32 i = 0; i < d.count; ++i) {
             std::fprintf(stderr, " %s %#llx+%#x", d.buffers[i].written ? "w" : "r",
                          static_cast<unsigned long long>(d.buffers[i].address), d.buffers[i].size);
@@ -3009,7 +3042,7 @@ void Rasterizer::NoteTracedDispatch(u64 hash, u32 x, u32 y, u32 z) {
     std::scoped_lock lock{traced_dispatch_mutex};
     auto& d = traced_dispatches[traced_dispatch_serial % traced_dispatches.size()];
     d = {.serial = traced_dispatch_serial++, .hash = hash, .tick = scheduler.CurrentTick(),
-         .dim = {x, y, z}};
+         .dim = {x, y, z}, .lds = CsRegs().SharedMemSize()};
     for (const auto& bound : bound_buffers) {
         if (d.count == std::size(d.buffers)) {
             break;
@@ -3041,7 +3074,8 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (BarrierStatsEnabled()) {
         g_barrier_stats_shader = pipeline->GetStage(Shader::SwStage::Compute).pgm_hash;
     }
-    if (SkippedShader(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash)) {
+    if (SkippedShader(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash) ||
+        SkipPascalCloth512(instance, pipeline->GetStage(Shader::SwStage::Compute).pgm_hash)) {
         return;
     }
     FrameCapture::Poll();
@@ -3169,7 +3203,25 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     const u64 serial_after_bind = scheduler.RecordSerial();
 
     const vk::Pipeline handle = pipeline->Handle();
-    const u32 dim_x = cs_program.dim_x, dim_y = cs_program.dim_y, dim_z = cs_program.dim_z;
+    // gow3 10 Nov 2026 (WorkgroupSplit, shader_recompiler/runtime_info.h): a shader compiled with
+    // smaller workgroups runs that many times the workgroups in X.
+    // Every part of a split workgroup is a workgroup in X (the shader decodes it), so the Y and Z
+    // counts stay within their limit of 65535.
+    const auto workgroup_split = pipeline->WorkgroupSplit(
+        {cs_program.num_thread_x.full, cs_program.num_thread_y.full, cs_program.num_thread_z.full});
+    const u32 split_parts = workgroup_split[0] * workgroup_split[1] * workgroup_split[2];
+    const u32 dim_x = cs_program.dim_x * split_parts, dim_y = cs_program.dim_y,
+              dim_z = cs_program.dim_z;
+    if (split_parts > 1 && u64(cs_program.dim_x) * split_parts > instance.GetMaxComputeWorkGroupCountX()) {
+        static std::atomic<u32> reported{0};
+        if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
+            std::printf("GPU: split dispatch of cs %#llx needs %llu workgroups in X, over the "
+                        "device's %u\n",
+                        static_cast<unsigned long long>(cs.pgm_hash),
+                        static_cast<unsigned long long>(u64(cs_program.dim_x) * split_parts),
+                        instance.GetMaxComputeWorkGroupCountX());
+        }
+    }
     NoteTracedDispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     scheduler.Checkpoint("dispatch",cs.pgm_hash);
     if (FrameCapture::Active()) {
@@ -3226,7 +3278,7 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     if (!pipelined) {
         DrainDrawPipe();
     }
-    const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline();
+    const ComputePipeline* pipeline = pipeline_cache.GetComputePipeline(true);
     if (!pipeline) {
         return;
     }
@@ -3240,7 +3292,8 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 
 void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr address,
                                         u32 size) {
-    if (SkippedShader(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash)) {
+    if (SkippedShader(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash) ||
+        SkipPascalCloth512(instance, pipeline->GetStage(Shader::SwStage::Compute).pgm_hash)) {
         return;
     }
     scheduler.PopPendingOperations();
@@ -3267,6 +3320,21 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     }
 
     const vk::Pipeline handle = pipeline->Handle();
+    // gow3 10 Nov 2026 (WorkgroupSplit): indirect dispatches select an unsplit permutation
+    // (HwComputeRuntimeInfo::indirect); a split one here would run part of each workgroup.
+    const auto& cs_regs = CsRegs();
+    const auto factors = pipeline->WorkgroupSplit(
+        {cs_regs.num_thread_x.full, cs_regs.num_thread_y.full, cs_regs.num_thread_z.full});
+    if (const u32 split = factors[0] * factors[1] * factors[2]; split > 1) {
+        static std::atomic<u32> reported{0};
+        if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
+            std::printf("GPU: indirect dispatch of cs %#llx with workgroups split by %u: part of "
+                        "each workgroup does not run\n",
+                        static_cast<unsigned long long>(
+                            pipeline->GetStage(Shader::SwStage::Compute).pgm_hash),
+                        split);
+        }
+    }
     const vk::Buffer args = buffer->Handle();
     const u64 args_offset = base;
     const u64 cloth_dispatch = cloth_peeks.empty() ? 0 : ++g_cloth_dispatches;
@@ -4658,6 +4726,15 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
                 !Gow3Toggle::Disabled(Gow3Toggle::PreparedResources)
             ? &prepared->vertex
             : nullptr;
+    // gow3 10 Nov 2026 (from SpartanPort e1594f6/bc78995): TryPreparedPipeline compared the V#s
+    // when the pipeline was chosen, but a write queued before this draw (WriteData, DMA; with the
+    // draw pipe, run after the pipeline was chosen) can change the table after that. Stale
+    // addresses or strides fetch vertices from memory the draw no longer owns: read them again.
+    if (ready && StaleVsharpCheck() &&
+        !fetch->SharpsUnchanged(pipeline->GetStage(Shader::SwStage::Vertex), ready->buffers)) {
+        NoteStaleVertexInputs();
+        ready = nullptr;
+    }
     if (ready) {
         attributes.assign(ready->attributes, ready->attributes + ready->count);
         bindings.assign(ready->bindings, ready->bindings + ready->count);
@@ -5915,6 +5992,17 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     std::optional<std::array<TextureSetEntry, TextureSet::MaxImages>> resolved_local;
     auto& resolved = CpuTrims() ? texture_set_scratch : resolved_local.emplace();
     bool set_ok = set_slot != nullptr;
+    // gow3 10 Nov 2026 (from SpartanPort 19744538): the generations the first binding resolved
+    // under. A later binding's FindImage may (un)register images, which can change an earlier
+    // binding's answer; stamping the set with the generation read after that replayed the earlier
+    // answer (a wrong texture, or a freed image's slot). The set is now recorded only when
+    // neither generation moved meanwhile. GOW3_TEXTURE_SET_STAMP_FIX=0: as before.
+    static const bool stamp_fix = [] {
+        const char* env = std::getenv("GOW3_TEXTURE_SET_STAMP_FIX");
+        return !(env && env[0] == '0');
+    }();
+    const u64 set_generation = texture_cache.RegistryGeneration();
+    const u64 set_scene_generation = scene_targets->Generation();
     if (CpuTrims() && set_ok) {
         std::fill_n(resolved.begin(), std::min<size_t>(stage.images.size(), resolved.size()),
                     TextureSetEntry{});
@@ -6210,10 +6298,14 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             }
         }
     }
-    if (set_ok && image_bindings.size() == stage.images.size()) {
+    const bool generations_held = !stamp_fix ||
+                                  (texture_cache.RegistryGeneration() == set_generation &&
+                                   scene_targets->Generation() == set_scene_generation);
+    if (set_ok && image_bindings.size() == stage.images.size() && generations_held) {
         // Remember the set: the same T#s resolve the same way while no image is (un)registered.
-        set_slot->generation = texture_cache.RegistryGeneration();
-        set_slot->scene_generation = scene_targets->Generation();
+        set_slot->generation = stamp_fix ? set_generation : texture_cache.RegistryGeneration();
+        set_slot->scene_generation =
+            stamp_fix ? set_scene_generation : scene_targets->Generation();
         set_slot->count = static_cast<u32>(stage.images.size());
         std::copy_n(resolved.begin(), set_slot->count, set_slot->entries.begin());
     } else if (set_slot) {

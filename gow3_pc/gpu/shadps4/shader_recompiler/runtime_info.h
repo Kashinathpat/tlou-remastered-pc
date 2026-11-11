@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <span>
 #include "common/types.h"
 #include "shader_recompiler/frontend/tessellation.h"
@@ -253,11 +254,90 @@ struct HwComputeRuntimeInfo {
     u32 shared_memory_size;
     std::array<u32, 3> workgroup_size;
     std::array<bool, 3> tgid_enable;
+    /// gow3 10 Nov 2026 (WorkgroupSplit): dispatched indirectly (the workgroup count is in GPU
+    /// memory, so it cannot be multiplied). Set only for dispatches WorkgroupSplit would split,
+    /// so other shaders keep their cached permutations. It takes what was padding: caches hold
+    /// RuntimeInfo raw, zeroed by Initialize, so older entries read it as false (direct).
+    bool indirect;
 
     bool operator==(const HwComputeRuntimeInfo& other) const noexcept {
-        return workgroup_size == other.workgroup_size && tgid_enable == other.tgid_enable;
+        return workgroup_size == other.workgroup_size && tgid_enable == other.tgid_enable &&
+               indirect == other.indirect &&
+               (!LdsSizeKey() || shared_memory_size == other.shared_memory_size);
+    }
+
+    /// gow3 10 Nov 2026 (from BilalReloaded's port 0.8.4; GOW3_LDS_SIZE_KEY=0: off): the shared
+    /// memory size is part of a compute permutation's key. It sizes the shader's shared array and
+    /// bounds its accesses (SharedMemoryBoundsPass), and one shader is dispatched with several
+    /// sizes (The Last of Us' e44070db was compiled for 12288, 47752 and 2048 bytes, whichever
+    /// came first): without it a permutation built for one size served the others.
+    static bool LdsSizeKey() {
+        static const bool value = [] {
+            const char* env = std::getenv("GOW3_LDS_SIZE_KEY");
+            return !(env && env[0] == '0');
+        }();
+        return value;
     }
 };
+static_assert(sizeof(HwComputeRuntimeInfo) == 20, "the shader cache holds RuntimeInfo raw");
+
+/// gow3 10 Nov 2026 (from SuperMedo 031baf5 / BilalReloaded 0.8.3): on NVIDIA a 1024-thread
+/// workgroup compiled to 64 registers per thread needs a whole SM's register file (65536), and
+/// the scheduler intermittently rejects it under load ("Graphics Exception:
+/// SKEDCHECK19_CTA_REGISTER_CONSUMPTION failed", Xid 13, then "Device lost during submit"); the
+/// Uncharted ports lost the device that way in Naughty Dog's 1024-thread skinning shaders. A
+/// workgroup of more than 256 threads of a shader that shares nothing between its threads (no
+/// LDS, no workgroup barriers, no workgroup index: Info::cs_split_eligible) runs as smaller
+/// workgroups instead, with that many times the workgroups; the shader rebuilds the guest IDs.
+/// The host workgroups hold 64 threads (one PS4 wave; at most a quarter of the register file,
+/// where 256 threads at 255 registers could still take all of it); GOW3_WORKGROUP_SPLIT_SIZE (32
+/// to 256) sets another size. Set by the pipeline cache: on for NVIDIA's driver;
+/// GOW3_WORKGROUP_SPLIT=0: off, =1: on for every driver. The Last of Us' device loss on a GTX
+/// 1050 Ti had another cause, its cloth solver (SkipPascalCloth512, vk_rasterizer.cpp).
+inline bool& WorkgroupSplitOn() {
+    static bool on = false;
+    return on;
+}
+inline u32& WorkgroupSplitHostSize() {
+    static u32 size = 64;
+    return size;
+}
+/// Whether a dispatch of this size would be split (before the shader's own eligibility).
+inline bool WorkgroupSplitSize(const std::array<u32, 3>& size) {
+    return WorkgroupSplitOn() && size[0] * size[1] * size[2] > 256;
+}
+/// How many host workgroups one guest workgroup runs as in each dimension ({1, 1, 1}:
+/// unchanged). The outermost dimensions are halved first, so each host workgroup holds
+/// consecutive guest invocation indices (whole waves, in the same order).
+inline std::array<u32, 3> WorkgroupSplitFactors(bool eligible, const HwComputeRuntimeInfo& cs) {
+    std::array<u32, 3> factors{1, 1, 1};
+    if (!eligible || cs.indirect || !WorkgroupSplitSize(cs.workgroup_size)) {
+        return factors;
+    }
+    const auto& size = cs.workgroup_size;
+    const auto host_total = [&] {
+        return (size[0] / factors[0]) * (size[1] / factors[1]) * (size[2] / factors[2]);
+    };
+    for (int dim = 2; dim >= 0; --dim) {
+        while (host_total() > WorkgroupSplitHostSize() && (size[dim] / factors[dim]) % 2 == 0) {
+            factors[dim] *= 2;
+        }
+        if (size[dim] / factors[dim] != 1) {
+            // An inner dimension is split only while every outer one is down to one host
+            // invocation, or a host workgroup would no longer hold consecutive indices.
+            break;
+        }
+    }
+    if (host_total() > 256) {
+        return {1, 1, 1};
+    }
+    return factors;
+}
+/// The number of host workgroups one guest workgroup runs as (1: unchanged).
+inline u32 WorkgroupSplit(bool eligible, const HwComputeRuntimeInfo& cs) {
+    const auto factors = WorkgroupSplitFactors(eligible, cs);
+    return factors[0] * factors[1] * factors[2];
+}
 
 /**
  * Stores information relevant to shader compilation sourced from liverpool registers.

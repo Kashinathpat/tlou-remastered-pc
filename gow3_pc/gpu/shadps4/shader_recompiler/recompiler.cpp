@@ -157,6 +157,9 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::SsaRewritePass(program);
     Shader::Optimization::SharedMemoryBarrierPass(program, runtime_info, profile);
     Shader::Optimization::DeadCodeEliminationPass(program);
+    // gow3 10 Nov 2026 (from BilalReloaded's port 0.8.4): the game's LDS accesses checked like
+    // the PS4, before the wave64 lowering adds its own scratch accesses (they go after the spare).
+    Shader::Optimization::SharedMemoryBoundsPass(program, runtime_info, profile);
     Shader::Optimization::LowerWave64BallotPass(program, runtime_info, profile);
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
     Shader::Optimization::DeadCodeEliminationPass(program);

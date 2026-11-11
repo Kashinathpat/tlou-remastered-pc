@@ -65,7 +65,9 @@ public:
     bool IsVkCrashDiagnosticEnabled() { return false; }
     bool IsVkGuestMarkersEnabled() { static const auto value = Flag("GOW3_VK_MARKERS", false); return value; }
     bool IsVkHostMarkersEnabled() { static const auto value = Flag("GOW3_VK_MARKERS", false); return value; }
-    bool IsVkValidationCoreEnabled() { return true; }
+    /// gow3 10 Nov 2026: GOW3_VK_VALIDATION_CORE=0 leaves the thread-safety checks only (fast
+    /// enough to play: two threads using one command buffer or pool at once, the queue too).
+    bool IsVkValidationCoreEnabled() { static const auto value = Flag("GOW3_VK_VALIDATION_CORE", true); return value; }
     bool IsVkValidationEnabled() { static const auto value = Flag("GOW3_VK_VALIDATION", false); return value; }
     bool IsVkValidationGpuEnabled() { return false; }
     bool IsVkValidationSyncEnabled() { static const auto value = Flag("GOW3_VK_VALIDATION_SYNC", false); return value; }

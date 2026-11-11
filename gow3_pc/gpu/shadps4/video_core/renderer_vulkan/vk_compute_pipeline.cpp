@@ -7,6 +7,7 @@
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_shader_util.h"
 
 namespace Vulkan {
 
@@ -16,7 +17,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
                                  const Shader::Info& info_, vk::ShaderModule module,
                                  SerializationSupport& sdata, bool preloading /*=false*/)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache, true},
-      compute_key{compute_key_} {
+      compute_key{compute_key_}, host_local_size{ShaderModuleLocalSize(module)} {
     auto& info = stages[int(Shader::SwStage::Compute)];
     info = &info_;
     const auto debug_str = GetDebugString();
@@ -102,7 +103,11 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
     pipeline_layout = std::move(layout);
     SetObjectName(device, *pipeline_layout, "Compute PipelineLayout {}", debug_str);
 
+    // gow3 10 Nov 2026 diagnostics (GOW3_PIPELINE_STATS=1): workgroups above 256 threads.
+    const bool statistics = instance.HasPipelineStatistics() && HostWorkgroupThreads() > 256;
     const vk::ComputePipelineCreateInfo compute_pipeline_ci = {
+        .flags = statistics ? vk::PipelineCreateFlagBits::eCaptureStatisticsKHR
+                            : vk::PipelineCreateFlags{},
         .stage = shader_ci,
         .layout = *pipeline_layout,
     };
@@ -112,6 +117,42 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
                vk::to_string(pipeline_result));
     pipeline = std::move(pipe);
     SetObjectName(device, *pipeline, "Compute Pipeline {}", debug_str);
+    if (statistics) {
+        const auto& device = instance.GetDevice();
+        const vk::PipelineInfoKHR pipeline_info{.pipeline = *pipeline};
+        const auto [exec_result, executables] =
+            device.getPipelineExecutablePropertiesKHR(pipeline_info);
+        std::string line = fmt::format("GPU pipeline statistics: cs {:#x}, {}x{}x{} threads:",
+                                       info->pgm_hash, host_local_size[0], host_local_size[1],
+                                       host_local_size[2]);
+        for (u32 i = 0; exec_result == vk::Result::eSuccess && i < executables.size(); ++i) {
+            const vk::PipelineExecutableInfoKHR exec_info{.pipeline = *pipeline,
+                                                          .executableIndex = i};
+            const auto [stat_result, stats] = device.getPipelineExecutableStatisticsKHR(exec_info);
+            if (stat_result != vk::Result::eSuccess) {
+                continue;
+            }
+            for (const auto& stat : stats) {
+                line += fmt::format(" {}=", std::string_view{stat.name.data()});
+                switch (stat.format) {
+                case vk::PipelineExecutableStatisticFormatKHR::eBool32:
+                    line += fmt::format("{}", stat.value.b32);
+                    break;
+                case vk::PipelineExecutableStatisticFormatKHR::eInt64:
+                    line += fmt::format("{}", stat.value.i64);
+                    break;
+                case vk::PipelineExecutableStatisticFormatKHR::eUint64:
+                    line += fmt::format("{}", stat.value.u64);
+                    break;
+                case vk::PipelineExecutableStatisticFormatKHR::eFloat64:
+                    line += fmt::format("{:.2f}", stat.value.f64);
+                    break;
+                }
+            }
+        }
+        std::printf("%s\n", line.c_str());
+        std::fflush(stdout);
+    }
 }
 
 ComputePipeline::~ComputePipeline() = default;

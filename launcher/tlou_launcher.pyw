@@ -80,7 +80,7 @@ TOGGLES = [
 # (label, variable, value on, value off, on by default)
 STARTUP = [
     ("Threads", [
-        ("Pipeline de draws", "GOW3_DRAW_PIPE", "1", "0", False),
+        ("Pipeline de draws", "GOW3_DRAW_PIPE", "1", "0", True),
         ("Gravação Vulkan em thread própria", "GOW3_VK_RECORD_THREAD", "1", "0", True),
         ("Prioridade alta nas threads da GPU", "GOW3_GPU_THREAD_PRIORITY", "above", "normal", True),
         ("Prioridades das threads do jogo", "GOW3_GUEST_PRIORITY", "1", "0", True),

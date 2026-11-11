@@ -29,6 +29,8 @@ public:
     explicit Instance(s32 physical_device_index, bool enable_validation);
     ~Instance();
     bool HasGpuCheckpoints() const { return gpu_checkpoints; }
+    /// gow3 diagnostics (GOW3_PIPELINE_STATS=1): VK_KHR_pipeline_executable_properties.
+    bool HasPipelineStatistics() const { return pipeline_statistics; }
     bool HasDeviceFault() const { return device_fault; }
 
     /// Returns a formatted string for the driver version
@@ -600,6 +602,7 @@ private:
     bool workgroup_memory_explicit_layout{};
     bool maintenance_5{};
     bool gpu_checkpoints{};
+    bool pipeline_statistics{};
     bool device_fault{};
     bool memory_priority{};
     bool pageable_device_memory{};

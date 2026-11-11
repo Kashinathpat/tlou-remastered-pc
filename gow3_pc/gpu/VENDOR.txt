@@ -17,3 +17,13 @@ Ported from SpartanPort (2026-11): e6c79a5fe constant-engine counter waits: no u
   SpartanPort c22329f (part): shader cache writes drained at window close (2 s), partial loads
   rejected, damaged records skipped (Serialization::CorruptData), SlotVector storage reserved
   once and committed in 2 MiB chunks (entries never move).
+  SpartanPort e1594f6 + bc78995: prepared draws whose V#s changed since a draw-preparation worker
+  read them are not used (TryPreparedPipeline, ResolveVertexBuffers; GOW3_STALE_VSHARP_CHECK=0).
+  SpartanPort 19744538: a texture set is remembered only when no image was (un)registered while
+  it was resolved (GOW3_TEXTURE_SET_STAMP_FIX=0).
+Ported from BilalReloaded's Uncharted port 0.8.4 (ea7a110b1, 2026-11): shared_memory_bounds_pass.cpp
+  (LDS accesses bounds-checked like the PS4, GOW3_LDS_BOUNDS) and the LDS size in a compute
+  permutation's key (GOW3_LDS_SIZE_KEY); cached compute shaders carry a "GLDB" meta record.
+After SuperMedo's 031baf5 / BilalReloaded 0.8.3: compute workgroups above 256 threads that share
+  nothing run as workgroups of 64 (WorkgroupSplitFactors; X, Y and Z, every part in X, the split
+  read back from the SPIR-V LocalSize at the dispatch; GOW3_WORKGROUP_SPLIT).

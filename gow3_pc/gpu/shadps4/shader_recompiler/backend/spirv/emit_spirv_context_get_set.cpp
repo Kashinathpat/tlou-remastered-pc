@@ -215,6 +215,46 @@ Id EmitGetAttributeU1(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     }
 }
 
+// gow3 10 Nov 2026 (WorkgroupSplitFactors): every part of a split guest workgroup is a host
+// workgroup in X (the Y and Z counts keep their limit of 65535): host workgroup X =
+// guest workgroup X * parts + part, part = px + fx * (py + fy * pz). The guest invocation ID in
+// dimension `comp` is the host one plus that dimension's part times the host workgroup size there.
+static u32 SplitParts(const EmitContext& ctx) {
+    return ctx.workgroup_split[0] * ctx.workgroup_split[1] * ctx.workgroup_split[2];
+}
+
+static Id SplitLocalInvocation(EmitContext& ctx, u32 comp) {
+    const Id host = ctx.OpCompositeExtract(
+        ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.local_invocation_id), comp);
+    const u32 factor = ctx.workgroup_split[comp];
+    if (factor == 1) {
+        return host;
+    }
+    const u32 host_size = ctx.runtime_info.hw.cs.workgroup_size[comp] / factor;
+    const Id group_x =
+        ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0);
+    Id part = ctx.OpUMod(ctx.U32[1], group_x, ctx.ConstU32(SplitParts(ctx)));
+    u32 inner = 1;
+    for (u32 i = 0; i < comp; ++i) {
+        inner *= ctx.workgroup_split[i];
+    }
+    if (inner > 1) {
+        part = ctx.OpUDiv(ctx.U32[1], part, ctx.ConstU32(inner));
+    }
+    part = ctx.OpUMod(ctx.U32[1], part, ctx.ConstU32(factor));
+    return ctx.OpIAdd(ctx.U32[1], ctx.OpIMul(ctx.U32[1], part, ctx.ConstU32(host_size)), host);
+}
+
+// The guest invocation index of a split workgroup: x + y * X + z * X * Y in guest terms.
+static Id SplitLocalInvocationIndex(EmitContext& ctx) {
+    const auto& size = ctx.runtime_info.hw.cs.workgroup_size;
+    const Id x = SplitLocalInvocation(ctx, 0);
+    const Id y = SplitLocalInvocation(ctx, 1);
+    const Id z = SplitLocalInvocation(ctx, 2);
+    const Id yz = ctx.OpIAdd(ctx.U32[1], y, ctx.OpIMul(ctx.U32[1], z, ctx.ConstU32(size[1])));
+    return ctx.OpIAdd(ctx.U32[1], x, ctx.OpIMul(ctx.U32[1], yz, ctx.ConstU32(size[0])));
+}
+
 Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     switch (attr) {
     case IR::Attribute::VertexId:
@@ -227,12 +267,21 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
         return ctx.OpLoad(ctx.U32[1], ctx.base_instance);
     case IR::Attribute::WorkgroupIndex:
         return ctx.workgroup_index_id;
-    case IR::Attribute::WorkgroupId:
-        return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), comp);
+    case IR::Attribute::WorkgroupId: {
+        const Id id =
+            ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), comp);
+        // gow3 10 Nov 2026 (WorkgroupSplitFactors): every part is in X (SplitLocalInvocation).
+        if (comp == 0 && ctx.workgroup_split_any) {
+            return ctx.OpUDiv(ctx.U32[1], id, ctx.ConstU32(SplitParts(ctx)));
+        }
+        return id;
+    }
     case IR::Attribute::LocalInvocationId:
-        return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.local_invocation_id),
-                                      comp);
+        return SplitLocalInvocation(ctx, comp);
     case IR::Attribute::LocalInvocationIndex:
+        if (ctx.workgroup_split_any) {
+            return SplitLocalInvocationIndex(ctx);
+        }
         return ctx.OpLoad(ctx.U32[1], ctx.local_invocation_index);
     case IR::Attribute::SampleIndex:
         return ctx.OpLoad(ctx.U32[1], ctx.sample_index);

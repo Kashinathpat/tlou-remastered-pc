@@ -25,3 +25,9 @@ Useful settings (environment, for diagnostics; `tools/probe_tlou.py` sets the us
 | `GOW3_GPU_PROFILE=1` | GPU time per render pass (slows rendering). |
 | `GOW3_FAULT_TRACE=1` | The first 64 access violations, written straight to the log. |
 | `GOW3_DUMP_SHADERS=1` | Shader binaries, IR and SPIR-V to the shader dump folder. |
+| `GOW3_GPU_CHECKPOINTS=4` | NVIDIA checkpoints around every GPU operation; a lost device prints the last ones reached (the marker of an operation is recorded before it). `=1`/`=2` add the device fault report, which loses the device on GTX 10 series cards. |
+| `GOW3_TRACE_DISPATCH=<hex>,...` | The last 64 dispatches of these compute shaders (groups, LDS size, bound buffers), printed when the device is lost. |
+| `GOW3_PIPELINE_STATS=1` | The driver's statistics (registers, stack, shared memory) of each compute pipeline above 256 threads. |
+| `GOW3_VK_VALIDATION=1` | Vulkan validation layer (with `VK_ADD_LAYER_PATH` pointing at it); `GOW3_VK_VALIDATION_CORE=0` keeps only its thread-safety checks, fast enough to play. |
+| `GOW3_PASCAL_CLOTH512=1` | Run the largest cloth solver on NVIDIA cards before Turing too (it loses the device there; `=0` skips it on every card). |
+| `GOW3_WORKGROUP_SPLIT=0`, `GOW3_LDS_BOUNDS=0`, `GOW3_LDS_SIZE_KEY=0` | Compute shaders as before: large workgroups not split (NVIDIA), LDS accesses not bounds-checked like the PS4, one permutation for every LDS size. |

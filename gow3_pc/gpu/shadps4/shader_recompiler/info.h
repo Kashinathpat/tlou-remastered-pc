@@ -154,6 +154,11 @@ struct Info : InfoPersistent {
     bool uses_group_shuffle{};
     bool uses_group_ballot{};
     IR::Type shared_types{};
+    /// gow3 10 Nov 2026: a compute shader whose workgroups may run as smaller ones (no shared
+    /// memory, no workgroup barriers, no workgroup index); see WorkgroupSplit in runtime_info.h.
+    /// Set by CollectShaderInfoPass; for a cached shader, read from its meta (a hint for whether
+    /// to compile it again: the dispatch takes the split from the binary's LocalSize).
+    bool cs_split_eligible{};
     bool uses_fp16{};
     bool uses_fp64{};
     bool uses_pack_10_11_11{};

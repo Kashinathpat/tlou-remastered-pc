@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdio>
+
 #include "common/assert.h"
 #include "common/div_ceil.h"
 #include "common/logging/log.h"
@@ -486,8 +488,29 @@ void EmitContext::DefineInputs() {
         break;
     }
     case SwStage::Compute:
+        // gow3 10 Nov 2026: split workgroups (WorkgroupSplitFactors, runtime_info.h): the guest
+        // IDs come from the host workgroup ID too.
+        workgroup_split = WorkgroupSplitFactors(info.cs_split_eligible, runtime_info.hw.cs);
+        workgroup_split_any = workgroup_split[0] * workgroup_split[1] * workgroup_split[2] > 1;
+        if (WorkgroupSplitSize(runtime_info.hw.cs.workgroup_size) && !runtime_info.hw.cs.indirect) {
+            const auto& size = runtime_info.hw.cs.workgroup_size;
+            std::printf("GPU: compute shader %#llx, %ux%ux%u workgroups: ",
+                        static_cast<unsigned long long>(info.pgm_hash), size[0], size[1],
+                        size[2]);
+            if (workgroup_split_any) {
+                std::printf("run as %ux%ux%u\n", size[0] / workgroup_split[0],
+                            size[1] / workgroup_split[1], size[2] / workgroup_split[2]);
+            } else {
+                std::printf("kept whole (%s)\n", info.cs_split_eligible
+                                                     ? "no smaller size keeps the waves whole"
+                                                     : "its threads share data");
+            }
+            std::fflush(stdout);
+        }
         if (info.loads.GetAny(IR::Attribute::WorkgroupIndex) ||
-            info.loads.GetAny(IR::Attribute::WorkgroupId)) {
+            info.loads.GetAny(IR::Attribute::WorkgroupId) ||
+            (workgroup_split_any && (info.loads.GetAny(IR::Attribute::LocalInvocationId) ||
+                                     info.loads.Get(IR::Attribute::LocalInvocationIndex)))) {
             workgroup_id =
                 DefineVariable(U32[3], spv::BuiltIn::WorkgroupId, spv::StorageClass::Input);
         }
@@ -495,7 +518,9 @@ void EmitContext::DefineInputs() {
             num_workgroups_id =
                 DefineVariable(U32[3], spv::BuiltIn::NumWorkgroups, spv::StorageClass::Input);
         }
-        if (info.loads.GetAny(IR::Attribute::LocalInvocationId)) {
+        // A split workgroup's guest invocation index is built from the guest invocation IDs.
+        if (info.loads.GetAny(IR::Attribute::LocalInvocationId) ||
+            (workgroup_split_any && info.loads.Get(IR::Attribute::LocalInvocationIndex))) {
             local_invocation_id =
                 DefineVariable(U32[3], spv::BuiltIn::LocalInvocationId, spv::StorageClass::Input);
         }

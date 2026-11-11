@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <span>
 
 #include "common/types.h"
@@ -16,5 +17,10 @@ namespace Vulkan {
  * @param device The vulkan device handle
  */
 vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device);
+
+/// gow3 10 Nov 2026 (WorkgroupSplitFactors, shader_recompiler/runtime_info.h): the LocalSize a
+/// module's SPIR-V declares (zeros: none, not a compute shader). The dispatch compares it with the
+/// guest workgroup size, so the split always matches the binary in use, cached or new.
+std::array<u32, 3> ShaderModuleLocalSize(vk::ShaderModule module);
 
 } // namespace Vulkan

@@ -284,6 +284,10 @@ public:
     Id tess_coord;
     std::array<Id, 30> patches{};
 
+    /// gow3 10 Nov 2026: a guest workgroup runs as this many host workgroups in each dimension
+    /// (WorkgroupSplitFactors); `workgroup_split_any`: some factor is above 1.
+    std::array<u32, 3> workgroup_split{1, 1, 1};
+    bool workgroup_split_any{};
     Id workgroup_id{};
     Id num_workgroups_id{};
     Id workgroup_index_id{};

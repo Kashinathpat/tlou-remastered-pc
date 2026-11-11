@@ -107,6 +107,8 @@ struct PipelineSelection {
     bool compilation_pending = false;
     DrawIndirectParams draw_indirect_params{};
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
+    /// gow3 10 Nov 2026: compute: the workgroup count is in GPU memory (no WorkgroupSplit).
+    bool indirect_dispatch{};
 };
 
 /// gow3: a draw-preparation worker's own program state (see vk_draw_prep.h).
@@ -125,6 +127,12 @@ struct PrepWorker {
 };
 
 struct PreparedDraw;
+
+/// gow3 (from SpartanPort e1594f6/bc78995): GOW3_STALE_VSHARP_CHECK=0 trusts the V#s a
+/// draw-preparation worker read, as before.
+bool StaleVsharpCheck();
+/// gow3: counts prepared draws whose V#s were stale; logs the total every 5 s at most.
+void NoteStaleVertexInputs();
 
 class PipelineCache {
 public:
@@ -189,7 +197,8 @@ public:
     static const GraphicsPipeline* WaitPending(const void* build);
     void ReleasePendingBuilds();
 
-    const ComputePipeline* GetComputePipeline();
+    /// gow3: `indirect`: the workgroup count is in GPU memory (no WorkgroupSplit).
+    const ComputePipeline* GetComputePipeline(bool indirect = false);
 
     /// gow3 18 Oct 2026: compiles the compute program of a dispatch seen ahead of the GPU thread
     /// (Liverpool's precompile scanner, at submit time) on a compiler worker: translation,

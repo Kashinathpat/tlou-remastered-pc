@@ -171,7 +171,8 @@ static u32 MapOutputs(std::span<Shader::OutputMap, 3> outputs, const AmdGpu::VsO
 }
 
 // The compute stage's runtime info from its registers (the GPU thread's and the precompile's).
-static void FillComputeRuntimeInfo(Shader::RuntimeInfo& info, const AmdGpu::ComputeProgram& cs_pgm) {
+static void FillComputeRuntimeInfo(Shader::RuntimeInfo& info, const AmdGpu::ComputeProgram& cs_pgm,
+                                   bool indirect = false) {
     info.props.num_user_data = cs_pgm.settings.num_user_regs;
     info.props.num_allocated_vgprs = cs_pgm.settings.num_vgprs * 4;
     info.props.fp_denorm_mode32 = cs_pgm.settings.fp_denorm_mode32;
@@ -183,6 +184,9 @@ static void FillComputeRuntimeInfo(Shader::RuntimeInfo& info, const AmdGpu::Comp
     info.hw.cs.tgid_enable = {cs_pgm.IsTgidEnabled(0), cs_pgm.IsTgidEnabled(1),
                               cs_pgm.IsTgidEnabled(2)};
     info.hw.cs.shared_memory_size = cs_pgm.SharedMemSize();
+    // gow3 10 Nov 2026 (WorkgroupSplit): only where it changes the binary, so other indirectly
+    // dispatched shaders keep their cached permutations.
+    info.hw.cs.indirect = indirect && Shader::WorkgroupSplitSize(info.hw.cs.workgroup_size);
 }
 
 const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& sel, HwStage stage,
@@ -320,7 +324,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         break;
     }
     case HwStage::Compute: {
-        FillComputeRuntimeInfo(info, liverpool->GetCsRegs());
+        FillComputeRuntimeInfo(info, liverpool->GetCsRegs(), sel.indirect_dispatch);
         break;
     }
     default:
@@ -423,6 +427,28 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
+    // gow3 10 Nov 2026 (WorkgroupSplit, shader_recompiler/runtime_info.h): before any shader is
+    // compiled or loaded. GOW3_WORKGROUP_SPLIT=0: off, =1: on for every driver.
+    {
+        const char* env = std::getenv("GOW3_WORKGROUP_SPLIT");
+        const bool nvidia = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
+        Shader::WorkgroupSplitOn() = env ? env[0] == '1' : nvidia;
+        if (const char* size_env = std::getenv("GOW3_WORKGROUP_SPLIT_SIZE")) {
+            const u32 size = static_cast<u32>(std::strtoul(size_env, nullptr, 10));
+            if (size >= 32 && size <= 256 && (size & (size - 1)) == 0) {
+                Shader::WorkgroupSplitHostSize() = size;
+            }
+        }
+        if (Shader::WorkgroupSplitOn()) {
+            std::printf("GPU: compute workgroups above 256 threads run as workgroups of %u where "
+                        "their threads share nothing (GOW3_WORKGROUP_SPLIT=0: whole, "
+                        "GOW3_WORKGROUP_SPLIT_SIZE: 32-256)\n",
+                        Shader::WorkgroupSplitHostSize());
+        } else {
+            std::printf("GPU: compute workgroups run whole (GOW3_WORKGROUP_SPLIT=1: split those "
+                        "above 256 threads)\n");
+        }
+    }
 
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
@@ -633,6 +659,10 @@ void PipelineCache::PublishShaders(bool wait) {
                 // user_data is refreshed on the next lookup; no pointer into a completed job survives.
                 program->info.user_data = {};
                 program->info_template = std::make_unique<Shader::Info>(program->info);
+            } else if (build->info.sw_stage == Shader::SwStage::Compute) {
+                // gow3 10 Nov 2026: a later permutation translated a copy of the info; its
+                // WorkgroupSplit eligibility goes into the meta written below (a load hint).
+                program->info.cs_split_eligible = build->info.cs_split_eligible;
             }
             build->spec.info = &program->info;
             RegisterShaderMeta(program->info, build->spec.fetch_shader_data, build->spec,
@@ -1070,7 +1100,52 @@ const GraphicsPipeline* PipelineCache::TryPreparedPipeline(const PreparedDraw& p
     // the switch is off).
     const auto it = prepared.key_hash ? graphics_pipelines.find(prepared.key, prepared.key_hash)
                                       : graphics_pipelines.find(prepared.key);
-    return it != graphics_pipelines.end() && !it->second->Failed() ? it->second.get() : nullptr;
+    if (it == graphics_pipelines.end() || it->second->Failed()) {
+        return nullptr;
+    }
+    const GraphicsPipeline* pipeline = it->second.get();
+    // gow3 10 Nov 2026 (from SpartanPort bc78995): the V# table is guest memory behind a
+    // user-data pointer, so the checks above do not cover it. A worker that read the V#s before
+    // the game rewrote the table chose the vertex shader's specialization (number class,
+    // component selection) from stale V#s: such a draw takes the regular path, as without a
+    // worker. ResolveVertexBuffers checks the V#s once more when the draw is recorded.
+    const auto& fetch = pipeline->GetFetchShader();
+    if (prepared.vertex.valid && fetch && fetch->attributes.size() == prepared.vertex.count &&
+        StaleVsharpCheck() &&
+        !fetch->SharpsUnchanged(pipeline->GetStage(SwStage::Vertex), prepared.vertex.buffers)) {
+        NoteStaleVertexInputs();
+        return nullptr;
+    }
+    return pipeline;
+}
+
+bool StaleVsharpCheck() {
+    static const bool on = [] {
+        const char* env = std::getenv("GOW3_STALE_VSHARP_CHECK");
+        const bool value = !(env && env[0] == '0');
+        if (!value) {
+            std::printf("GPU: prepared V#s are used without checking them again "
+                        "(GOW3_STALE_VSHARP_CHECK=0)\n");
+        }
+        return value;
+    }();
+    return on;
+}
+
+void NoteStaleVertexInputs() {
+    static std::atomic<u64> stale{0};
+    static std::atomic<s64> last_report{0};
+    const u64 count = stale.fetch_add(1, std::memory_order_relaxed) + 1;
+    const s64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    s64 last = last_report.load(std::memory_order_relaxed);
+    if ((last != 0 && now - last < 5000) ||
+        !last_report.compare_exchange_strong(last, now, std::memory_order_relaxed)) {
+        return;
+    }
+    std::printf("Vertex inputs: %llu prepared draws in all had stale V#s and read them again\n",
+                static_cast<unsigned long long>(count));
 }
 
 namespace {
@@ -1426,7 +1501,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     return used(it->second->Failed() ? nullptr : it->second.get());
 }
 
-const ComputePipeline* PipelineCache::GetComputePipeline() {
+const ComputePipeline* PipelineCache::GetComputePipeline(bool indirect) {
+    sel.indirect_dispatch = indirect;
     PublishShaders();
     PublishGraphics();
     DrainPrefetch();

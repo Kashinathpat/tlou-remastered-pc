@@ -41,6 +41,15 @@ static constexpr u32 ShaderMetaVersion = 13u; // gow3: the hash of the binary it
 /// written together with them (DataBase::WrittenTogether).
 static constexpr u32 LegacyShaderMetaVersion = 12u; // BufferResource::access_extent
 static constexpr u32 PipelineKeyVersion = 5u; // gow3: Info layout (ImageResource::needs_native)
+/// gow3 10 Nov 2026: starts the trailing WorkgroupSplit record of a compute shader's meta
+/// ("WGSP"); older metas end without it (or with zero padding).
+static constexpr u32 WorkgroupSplitMagic = 0x50534757u;
+/// gow3 10 Nov 2026: starts the record of the direct memory access setting a shader was translated
+/// under ("GDMA"), in every stage's meta.
+static constexpr u32 DirectMemoryMagic = 0x414d4447u;
+/// gow3 10 Nov 2026: starts the record of whether a compute shader's LDS accesses were
+/// bounds-checked (SharedMemoryBoundsPass), "GLDB".
+static constexpr u32 LdsBoundsMagic = 0x42444c47u;
 
 /// gow3: the cache name of a shader's SPIR-V. Shaders that gained multi-wave LDS barriers get a
 /// new name, so binaries cached before the fix are not found and only those shaders recompile.
@@ -867,6 +876,28 @@ void RegisterShaderMeta(const Shader::Info& info,
 
     spec.Serialize(ar);
     info.Serialize(ar);
+    // gow3 10 Nov 2026: trailing records, absent from older metas, which load as before.
+    // The direct memory access switch the shader was translated under: a shader translated with
+    // it off has no DMA buffers and uses_dma = false, which said nothing about the switch, so
+    // turning it back on kept those binaries (the PS4 menu's translucent surfaces drawn wrong, and
+    // pipelines of one program mixing permutations of both kinds: layout errors 07988/07990).
+    {
+        Serialization::Writer tail{ar};
+        tail.Write(Serialization::DirectMemoryMagic);
+        tail.Write(static_cast<u8>(EmulatorSettings.IsDirectMemoryAccessEnabled()));
+    }
+    // WorkgroupSplit: only a hint for LoadShaderMeta (whether to compile again); the dispatch
+    // takes the split from the binary's LocalSize.
+    if (info.sw_stage == Shader::SwStage::Compute) {
+        Serialization::Writer tail{ar};
+        tail.Write(Serialization::WorkgroupSplitMagic);
+        tail.Write(static_cast<u8>(info.cs_split_eligible));
+        tail.Write(static_cast<u8>(Shader::WorkgroupSplit(info.cs_split_eligible,
+                                                          spec.runtime_info.hw.cs)));
+        // SharedMemoryBoundsPass (GOW3_LDS_BOUNDS): whether its LDS accesses were checked.
+        tail.Write(Serialization::LdsBoundsMagic);
+        tail.Write(static_cast<u8>(Shader::Optimization::SharedMemoryBounds(info.pgm_hash)));
+    }
 
     Storage::DataBase::Instance().Save(Storage::BlobType::ShaderMeta,
                                        fmt::format("{:#018x}", perm_hash), ar.TakeOff());
@@ -915,6 +946,54 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
 
     spec.Deserialize(ar);
     info.Deserialize(ar);
+
+    // gow3 10 Nov 2026: the trailing records (RegisterShaderMeta), in any order; zero padding or
+    // anything else ends them.
+    bool has_tail = false, has_dma_record = false;
+    u8 eligible = 0, applied = 1, dma_at_compile = 0, lds_bounds = 0;
+    while (ar.Remaining() >= sizeof(u32)) {
+        Serialization::Reader tail{ar};
+        u32 magic{};
+        tail.Read(magic);
+        if (magic == Serialization::WorkgroupSplitMagic && ar.Remaining() >= 2 * sizeof(u8)) {
+            tail.Read(eligible);
+            tail.Read(applied);
+            has_tail = true;
+        } else if (magic == Serialization::DirectMemoryMagic && ar.Remaining() >= sizeof(u8)) {
+            tail.Read(dma_at_compile);
+            has_dma_record = true;
+        } else if (magic == Serialization::LdsBoundsMagic && ar.Remaining() >= sizeof(u8)) {
+            tail.Read(lds_bounds);
+        } else {
+            break;
+        }
+    }
+    // A shader translated under the other direct memory access setting compiles again, either way.
+    if (has_dma_record &&
+        (dma_at_compile != 0) != EmulatorSettings.IsDirectMemoryAccessEnabled()) {
+        return false;
+    }
+    // A compute shader translated with the LDS bounds checks the other way (or before them: no
+    // record) compiles again once (SharedMemoryBoundsPass, GOW3_LDS_BOUNDS).
+    if (info.sw_stage == Shader::SwStage::Compute &&
+        (lds_bounds != 0) != Shader::Optimization::SharedMemoryBounds(info.pgm_hash)) {
+        return false;
+    }
+
+    // WorkgroupSplit (shader_recompiler/runtime_info.h): a compute shader cached before the split
+    // (no record), or cached with the switch the other way, compiles again when the split would
+    // change its binary. Other shaders load as before.
+    if (info.sw_stage == Shader::SwStage::Compute) {
+        info.cs_split_eligible = has_tail && eligible != 0;
+        const auto& cs = spec.runtime_info.hw.cs;
+        const bool would_split = Shader::WorkgroupSplitSize(cs.workgroup_size) && !cs.indirect;
+        if (would_split && !has_tail) {
+            return false; // eligibility unknown: translated again once
+        }
+        if (has_tail && Shader::WorkgroupSplit(info.cs_split_eligible, cs) != applied) {
+            return false;
+        }
+    }
 
     // Motion vertex shaders embed session-local buffer device addresses. They must be
     // recompiled for the current allocation, never loaded from a previous process.

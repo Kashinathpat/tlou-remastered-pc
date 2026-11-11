@@ -36,6 +36,16 @@ int main() {
     assert(snapshot.fetch && snapshot.fetch->attributes.size() == 1);
     assert(snapshot.buffers[0].base_address == 0x12340);
 
+    // A V# copy taken earlier (draw preparation) is stale once the game rewrites the table.
+    assert(snapshot.fetch->SharpsUnchanged(info, snapshot.buffers.data()));
+    buffer.stride = 32;
+    assert(!snapshot.fetch->SharpsUnchanged(info, snapshot.buffers.data()));
+    buffer.stride = 16;
+    buffer.base_address = 0x56780;
+    assert(!snapshot.fetch->SharpsUnchanged(info, snapshot.buffers.data()));
+    buffer.base_address = 0x12340;
+    assert(snapshot.fetch->SharpsUnchanged(info, snapshot.buffers.data()));
+
     // Both guest pointers are invalid after capture. A compiler worker must not dereference them.
     ud.fill(0);
     auto worker = std::async(std::launch::async, [&] {

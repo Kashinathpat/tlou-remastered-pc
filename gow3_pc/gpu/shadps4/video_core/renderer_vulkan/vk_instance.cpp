@@ -448,6 +448,13 @@ bool Instance::CreateDevice() {
         device_fault=add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
         std::printf("GPU device fault reports enabled: %d (no checkpoints)\n",int(device_fault));
     }
+    // gow3 10 Nov 2026 diagnostics (GOW3_PIPELINE_STATS=1): the driver's statistics of each
+    // compute pipeline above 256 threads (registers, local and shared memory), printed when it
+    // is created (ComputePipeline).
+    if (const char* stats = std::getenv("GOW3_PIPELINE_STATS"); stats && stats[0] == '1') {
+        pipeline_statistics = add_extension(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+        std::printf("GPU pipeline statistics: %d\n", int(pipeline_statistics));
+    }
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     pipeline_binaries = PipelineBinaryCacheRequested() && maintenance_5 &&
         feature_chain.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5 &&
@@ -816,6 +823,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceFaultFeaturesEXT{
             .deviceFault = true,
         },
+        vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR{
+            .pipelineExecutableInfo = true,
+        },
         vk::PhysicalDeviceAddressBindingReportFeaturesEXT{
             .reportAddressBinding = true,
         },
@@ -887,6 +897,9 @@ bool Instance::CreateDevice() {
     }
     if (!device_fault) {
         device_chain.unlink<vk::PhysicalDeviceFaultFeaturesEXT>();
+    }
+    if (!pipeline_statistics) {
+        device_chain.unlink<vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR>();
     }
     if (!address_binding_report) {
         device_chain.unlink<vk::PhysicalDeviceAddressBindingReportFeaturesEXT>();
