@@ -8,6 +8,14 @@ and a Vulkan renderer (the shadPS4 video core) executes the PS4 GPU work.
 > CUSA00552 folder, and its update). This project is not affiliated with Sony Interactive
 > Entertainment or Naughty Dog.
 
+## Why
+
+Why use the PS4 version instead of Windows version?
+
+- The PS4 remaster preserves the artistic style of the PS3 version and just improves the resolution and graphics.
+- Last version with multiplayer support, having multiplayer code is much easier to implement community/unofficial multiplayer
+- Use less resources and storage space than the official PC port (1080p textures, less polygons, no ray-tracing), which has a history of performance problems and poor optimization.
+
 ## Status
 
 Work in progress, reported playable from start to finish by a player, with one crash along the way
