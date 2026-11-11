@@ -12,8 +12,10 @@ FORBIDDEN = {".psarc", ".sprx", ".prx", ".elf", ".pkg", ".sfo", ".dds", ".bk2", 
 FORBIDDEN_NAMES = {"eboot.bin", "tlou.ini", "launcher.json", "boot-linked.bin", "icon0.png", "pic0.png", "pic1.png"}
 FORBIDDEN_FOLDERS = {"analysis", "user", "assets"}
 ROOT = Path(__file__).resolve().parent.parent
-# This machine: the user's folder name and where the repository is, in both slash forms.
-PRIVATE = [Path.home().name.encode(), str(ROOT).encode(), ROOT.as_posix().encode()]
+# This machine: the user's folder (as a path: the bare name can be part of an ordinary word, such as
+# the repository's owner in launcher/updater.py) and where the repository is, in both slash forms.
+PRIVATE = [f"{Path.home().parent.name}\\{Path.home().name}".encode(), f"{Path.home().parent.name}/{Path.home().name}".encode(),
+           str(ROOT).encode(), ROOT.as_posix().encode()]
 
 
 def main():
