@@ -33,8 +33,9 @@ DISPLAY = {"borderless": "borderless", "fullscreen": "fullscreen", "windowed": "
 UPSCALERS = {"off": "off", "FSR 3": "fsr3", "TAA": "taa", "DLSS": "dlss"}
 PRESETS = {"q_native": "0", "q_quality": "1", "q_balanced": "2", "q_performance": "3", "q_ultra": "4"}
 # The size the game draws at (output_res in tlou.ini; tools/probe_tlou.py patches the game's
-# render size to it at start).
-RESOLUTIONS = ["1280x720", "1600x900", "1920x1080", "2560x1440", "2880x1620", "3200x1800", "3840x2160"]
+# render size to it at start). The ultrawide sizes (21:9, 32:9) also get the aspect ratio patches.
+RESOLUTIONS = ["1280x720", "1600x900", "1920x1080", "2560x1440", "2880x1620", "3200x1800", "3840x2160",
+               "2560x1080", "3440x1440", "3840x1600", "3840x1080", "5120x1440"]
 DEFAULT_SWITCHES = {"motion_blur": False, "job_sleep": True, "profile": False, "background_shaders": True,
                     "pro_shadows": True}
 DEFAULT_LANGUAGE = "en"

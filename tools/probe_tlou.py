@@ -147,7 +147,8 @@ def parse_size(text):
     width, height = int(match.group(1)), int(match.group(2))
     if not (640 <= width <= 7680 and 360 <= height <= 4320):
         return None
-    return width & ~1, height & ~1
+    # The game asserts that its display width is a multiple of 16 (1366x768 draws at 1360x768).
+    return width & ~15, height & ~1
 
 
 def render_extra_mib(size):
@@ -184,6 +185,70 @@ def render_size_patch(size, extra_mib):
                     (0x14A5908, q(0xA1C00000), q(0xA1C00000 + extra)),   # ALLOCATION_GPU_MEMORY
                     (0x14A6708, q(0x2A1C000), q(0x2A1C000 + small)),     # ALLOCATION_RENDER_TARGET
                     (0x14A6728, q(0x292B3C00), q(0x292B3C00 + extra - small))]
+    return changes
+
+
+# Another aspect ratio than 16:9 (ultrawide monitors, 21:9 and 32:9; also 16:10). The game assumes
+# 16:9 in its camera and its 1280x720 interface canvas; at 2560x1080 alone it stretches both. These
+# changes keep the vertical field of view and show more at the sides (Hor+), keep the interface 16:9
+# and centered, and its markers on the right places. The sites and values follow
+# github.com/SanyaGames227/tlou_r_shadps4_ultrawide (an XML patch generator for shadPS4; its
+# addresses are these plus 0x400000); each one was checked against the 01.11 executable. R is the
+# width's ratio to 16:9 (2560x1080: 1.333). The movies' black bars are the runtime's
+# (GOW3_DISPLAY_ASPECT, gpu/shadps4/video_core/renderer_vulkan/vk_movie_aspect.h).
+ASPECT_16_9 = 16 / 9
+
+
+def is_16_9(size):
+    return abs(size[0] / size[1] / ASPECT_16_9 - 1) < 0.003
+
+
+def aspect_patch(size):
+    import math
+    import struct
+    f = lambda value: struct.pack("<f", value).hex().upper()
+    rel = lambda after, target: struct.pack("<i", target - after).hex().upper()
+    nops = lambda count: "90" * count
+    r = size[0] / size[1] / ASPECT_16_9
+    changes = [
+        # The render options' aspect ratio (+0x18, 16:9) in both of their initializers.
+        (0xAB0594, f(ASPECT_16_9), f(size[0] / size[1])),
+        (0xAB091B, f(ASPECT_16_9), f(size[0] / size[1])),
+        # The camera's projection: cot(fov/2) / R instead of 1 / tan(fov/2) (the vertical field of
+        # view stays). The 1.0 it divides (0x115DF64, shared) is read from 1/R in padding instead.
+        (0xA223C7, nops(4), f(1 / r)),
+        (0xA252AC, rel(0xA252B0, 0x115DF64), rel(0xA252B0, 0xA223C7)),
+    ]
+    # The camera's clipping bounds (the three cameras' half width, x R): each multiply moves into a
+    # call to a stub in the padding after the render options' initializer, which multiplies by R.
+    times_r = 0xAB0673
+    changes.append((times_r, nops(13), "C5FA590501000000C3" + f(r)))    # vmulss xmm0,[R]; ret; R
+    for site, original, stub, room in [(0x29234C, "C5FA5985E0FDFFFF", 0xAB05F1, 13),   # [rbp-0x220]
+                                       (0x29374B, "C5FA5945F0", 0xAB0663, 10),          # [rbp-0x10]
+                                       (0x2965A4, "C5FA5985A0FEFFFF", 0xAB0691, 13)]:   # [rbp-0x160]
+        code = original + "E9" + rel(stub + len(original) // 2 + 5, times_r)
+        changes.append((stub, nops(room), code))
+        call = "E8" + rel(site + 5, stub)
+        changes.append((site, original, call + "0F1F00"[:len(original) - 10]))
+    # The interface: its 1280-wide canvas maps to the middle 1/R of the screen (x scale 2/1280R,
+    # offset -1/R), also in the debug menus; text's canvas is 1280R wide, and the crosshair divides
+    # by it (instead of its own 1280.0 at 0x10FD238); the 3D canvas projection is x R.
+    ui_scale, ui_offset = f(2 / (1280 * r)), f(-1 / r)
+    for at in (0x1172444, 0x116CED0, 0x116CEE0, 0x116CF20):
+        changes += [(at, f(2 / 1280), ui_scale), (at + 8, f(-1.0), ui_offset)]
+    changes += [(0x1186BB8, f(1280.0), f(1280 * r)), (0x1186BC4, f(1280.0), f(1280 * r)),
+                (0x6250DC, rel(0x6250E0, 0x10FD238), rel(0x6250E0, 0x1186BB8)),
+                (0x1186F80, f(1.0), f(r))]
+    # The interaction and pickup icons: world -> canvas x = (x R + 1) * 640 instead of (x + 1) *
+    # 640, through a jump to padding (vaddss xmm5,xmm6 and vmulss xmm5,[640.0] move there).
+    site, back, cave = 0xAAD8C1, 0xAAD8CD, 0xC9FC61
+    changes.append((site, "C5D258EEC5D2592D" + rel(back, 0x116BC3C), "E9" + rel(site + 5, cave) + nops(7)))
+    changes.append((cave, nops(29), "C5D2592D" + rel(cave + 8, cave + 25) + "C5D258EE"
+                    + "C5D2592D" + rel(cave + 20, 0x116BC3C) + "E9" + rel(cave + 25, back) + f(r)))
+    # The collectibles' preview camera (pickup notice, artifacts in the backpack): its 60 degree
+    # horizontal field of view widens to keep the 16:9 vertical one.
+    fov = 2 * math.atan(r * math.tan(1.0470927953720093 / 2))
+    changes += [(0x10C9890, "2307863F", f(fov)), (0x10C9928, "2307863F", f(fov))]
     return changes
 
 
@@ -447,6 +512,10 @@ def main():
     extra = render_extra_mib(size)
     if size != RENDER_DEFAULT:
         patches[resolution_patch] = render_size_patch(size, extra)
+    # TLOU_ASPECT=0 leaves another aspect ratio than 16:9 stretched.
+    aspect_name = f"aspect ratio {size[0]}:{size[1]}"
+    if not is_16_9(size) and os.environ.get("TLOU_ASPECT") != "0":
+        patches[aspect_name] = aspect_patch(size)
     for name in [c.strip() for c in os.environ.get("TLOU_CHEATS", "flashlight").split(",") if c.strip()]:
         if name in CHEATS:
             patches[name] = CHEATS[name]
@@ -466,6 +535,9 @@ def main():
     # The host's renderer follows the game's own size (no host scaling of its render targets), and
     # the in-game menu shows it.
     env["GOW3_GAME_RESOLUTION"] = f"{size[0]}x{size[1]}"
+    # The movies (the cutscenes) keep 16:9 in a display of this aspect ratio, with black bars.
+    if aspect_name in applied:
+        env["GOW3_DISPLAY_ASPECT"] = f"{size[0]}x{size[1]}"
     print(f"Resolution: the game draws at {size[0]}x{size[1]}"
           + (f" ({extra} MiB more for its render targets)" if extra else ""), flush=True)
     if red_zone:

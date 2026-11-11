@@ -1,14 +1,20 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "common/assert.h"
+#include "video_core/renderer_vulkan/vk_movie_aspect.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
 namespace Vulkan {
@@ -128,6 +134,20 @@ std::vector<u32> WithInvariantPosition(std::span<const u32> code) {
     return patched;
 }
 
+// gow3 11 Nov 2026: GOW3_DISPLAY_ASPECT=<w>x<h>, the display's aspect ratio when it is not 16:9
+// (tools/probe_tlou.py): the movies keep 16:9 in it (vk_movie_aspect.h).
+float DisplayAspect() {
+    static const float aspect = [] {
+        const char* env = std::getenv("GOW3_DISPLAY_ASPECT");
+        int width = 0, height = 0;
+        if (!env || std::sscanf(env, "%dx%d", &width, &height) != 2 || width <= 0 || height <= 0) {
+            return 0.0f;
+        }
+        return static_cast<float>(width) / static_cast<float>(height);
+    }();
+    return aspect;
+}
+
 } // Anonymous namespace
 
 vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
@@ -136,6 +156,13 @@ vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
         patched = WithInvariantPosition(code);
         if (!patched.empty()) {
             code = patched;
+        }
+    }
+    std::vector<u32> movie;
+    if (DisplayAspect() > 0.0f) {
+        movie = WithMovieAspect(code, DisplayAspect());
+        if (!movie.empty()) {
+            code = movie;
         }
     }
     const vk::ShaderModuleCreateInfo shader_info = {

@@ -98,12 +98,20 @@ the launcher.
    seconds. With the game closed, move the folder, then link it back:
    `mklink /J analysis\tlou-user\cache <folder on the SSD>` (in `cmd`).
 
-The launcher's Resolution is the size the game draws at (from 1280x720 to 3840x2160, any
-`<width>x<height>` in `output_res` of `tlou.ini`; `TLOU_RESOLUTION` overrides it): the game's own
-table of render sizes, which the PS4 Pro used, is patched at start, and above 1080p its render
+The launcher's Resolution is the size the game draws at (1280x720 to 3840x2160 or 5120x1440;
+any `<width>x<height>` in `output_res` of `tlou.ini`; `TLOU_RESOLUTION` overrides it): the game's
+own table of render sizes, which the PS4 Pro used, is patched at start, and above 1080p its render
 targets get more GPU memory, as on a PS4 Pro. It takes effect on the next start; the in-game menu
 shows it under Image > Information. Higher sizes cost GPU time (a GTX 1050 Ti Mobile: about 15 FPS
 at 3840x2160).
+
+Ultrawide monitors: a Resolution of another aspect ratio than 16:9 (2560x1080, 3440x1440,
+3840x1600, 5120x1440, ...) also patches the game's camera to show more at the sides with the same
+vertical view, keeps the interface 16:9 in the middle, and puts the cutscene movies between black
+bars instead of stretching them. These patches follow SanyaGames227's
+[tlou_r_shadps4_ultrawide](https://github.com/SanyaGames227/tlou_r_shadps4_ultrawide) for
+shadPS4. The width must be a multiple of 16 (the game asserts it; other widths are rounded down).
+`TLOU_ASPECT=0` leaves the image stretched.
 
 The launcher sets the display, frame limit and folders, in nine languages; its Debug menu switches
 each optimization off, some of them while the game runs. The in-game menu (Insert, or R3+L2 on a
