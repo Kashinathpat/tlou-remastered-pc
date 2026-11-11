@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+#include "tlou-messages.h"
+
 #define TITLE L"The Last of Us Remastered"
 /* Enough for Python to start and fail loudly: the game itself runs far longer. */
 #define FAILED_WITHIN_MS 6000
@@ -53,7 +55,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES)
         swprintf(script, 32768, L"%ls\\..\\tools\\run_game.py", dir);
     if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(NULL, L"tools\\run_game.py n\u00e3o foi encontrado ao lado deste arquivo.", TITLE,
+        MessageBoxW(NULL, message(dir, MSG_NO_GAME_SCRIPT), TITLE,
                     MB_OK | MB_ICONERROR);
         return 1;
     }
@@ -116,8 +118,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         CloseHandle(process.hProcess);
     }
     if (!started || code != 0) {
-        MessageBoxW(NULL, L"O jogo n\u00e3o abriu. Confira se o Python est\u00e1 instalado e no PATH; "
-                          L"o log \u00e9 analysis\\tlou\\launcher-run.log.", TITLE,
+        MessageBoxW(NULL, message(dir, MSG_GAME_FAILED), TITLE,
                     MB_OK | MB_ICONERROR);
         return 1;
     }

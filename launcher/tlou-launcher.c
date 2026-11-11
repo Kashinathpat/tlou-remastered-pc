@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <wchar.h>
 
+#include "tlou-messages.h"
+
 #define TITLE L"The Last of Us Remastered"
 #define FAILED_WITHIN_MS 4000
 
@@ -24,7 +26,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES)
         swprintf(script, 32768, L"%ls\\launcher\\tlou_launcher.pyw", dir);
     if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(NULL, L"tlou_launcher.pyw n\u00e3o foi encontrado ao lado deste arquivo.", TITLE,
+        MessageBoxW(NULL, message(dir, MSG_NO_LAUNCHER_SCRIPT), TITLE,
                     MB_OK | MB_ICONERROR);
         return 1;
     }
@@ -53,7 +55,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         CloseHandle(process.hProcess);
     }
     if (!started || code != 0) {
-        MessageBoxW(NULL, L"O launcher n\u00e3o abriu. Confira se o Python est\u00e1 instalado e no PATH.", TITLE,
+        MessageBoxW(NULL, message(dir, MSG_LAUNCHER_FAILED), TITLE,
                     MB_OK | MB_ICONERROR);
         return 1;
     }
