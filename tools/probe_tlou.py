@@ -8,6 +8,7 @@ eboot.bin, sce_module and sce_sys are prepared, and the runtime reads its files 
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -120,6 +121,72 @@ JOB_SLEEP = [(0xC87D63, "7304", "EB04"), (0xC87D96, "741B", "9090"), (0xC873E1, 
 # the side, 2, 4, 8 or 16). The base PS4 creates those targets too. The flag's default (the render
 # options' initializer) is on; the rest of the Pro mode stays off (+0x42C, a faster depth clear, too).
 PRO_SHADOWS = [(0xAEB313, "C6831D02000000", "C6831D02000001")]
+# The render resolution (the launcher's Resolution, output_res in tlou.ini; TLOU_RESOLUTION=<w>x<h>
+# overrides it). The game draws its 3D scene at the size the render options' +0xF0 picks from the
+# engine's table of render sizes (0xAB0600, the debug menu's "Screen Resolution"): 0 = 3840x2160,
+# 1-8 = the widths at 0x116BFA0 and heights at 0x116BFC0, 3680x2070 ... 1920x1080. The options'
+# initializer (0xAEB00F) sets 8 and only a PS4 Pro changes it, so the last entry, 1920x1080, is
+# replaced by the chosen size.
+# Above 1080p the render targets no longer fit the base PS4's memory map (the "Render Target Heap"
+# assertion at boot). A PS4 Pro's map (0x151A4F0) gives ALLOCATION_GPU_MEMORY 600 MiB more for its
+# 3200x1800 checkerboard: 130 instead of 42 MiB and 1171 instead of 659 MiB for the two
+# ALLOCATION_RENDER_TARGET heaps. Here the base map (0x14A58C0, in the RELRO segment) grows the GPU
+# memory and those heaps the same way, by RENDER_TARGET_EXTRA_MIB scaled with the pixel count; the
+# direct memory total of the base config (0x2F5E44) and the size the game expects
+# sceKernelGetDirectMemorySize to report (0x10B36; another size means a development kit) grow with
+# it. The GPU memory is reserved in a range aligned to 4 GiB, so it stays below 4096 MiB.
+RENDER_DEFAULT = (1920, 1080)
+GPU_MEMORY_MIB = 2588
+RENDER_TARGET_EXTRA_MIB = 500     # per 1080p frame of extra pixels (1440p: 448 MiB, 4K: 1500 MiB)
+
+
+def parse_size(text):
+    match = re.fullmatch(r"\s*(\d{3,4})\s*x\s*(\d{3,4})\s*", text or "")
+    if not match:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    if not (640 <= width <= 7680 and 360 <= height <= 4320):
+        return None
+    return width & ~1, height & ~1
+
+
+def render_extra_mib(size):
+    """GPU memory added for render targets at this size (0 up to 1080p's pixel count)."""
+    pixels = size[0] * size[1] / (RENDER_DEFAULT[0] * RENDER_DEFAULT[1])
+    # The memory map's sizes must be whole multiples of 2 MiB (an assertion at boot): 64 MiB steps.
+    extra = -(-int(max(0.0, pixels - 1.0) * RENDER_TARGET_EXTRA_MIB) // 64) * 64
+    return min(extra, 4096 - GPU_MEMORY_MIB - 8)
+
+
+def ini_value(path, key):
+    """A key of the settings file (tlou.ini), or None."""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.strip() == key:
+                return value.strip()
+    except OSError:
+        pass
+    return None
+
+
+def render_size_patch(size, extra_mib):
+    q = lambda value: value.to_bytes(8, "little").hex().upper()
+    d = lambda value: value.to_bytes(4, "little").hex().upper()
+    changes = [(0x116BFBC, d(RENDER_DEFAULT[0]), d(size[0])),
+               (0x116BFDC, d(RENDER_DEFAULT[1]), d(size[1]))]
+    if extra_mib:
+        extra = extra_mib << 20
+        small = min(extra, 88 << 20)   # the first render target heap: 42 -> at most the Pro's 130 MiB
+        total = 0x120000000 + extra
+        changes += [(0x2F5E44, "48BA" + q(0x120000000), "48BA" + q(total)),
+                    (0x10B36, "49BC" + q(0x120000000), "49BC" + q(total)),
+                    (0x14A5908, q(0xA1C00000), q(0xA1C00000 + extra)),   # ALLOCATION_GPU_MEMORY
+                    (0x14A6708, q(0x2A1C000), q(0x2A1C000 + small)),     # ALLOCATION_RENDER_TARGET
+                    (0x14A6728, q(0x292B3C00), q(0x292B3C00 + extra - small))]
+    return changes
+
+
 # Fixes, on in every run.
 FIXES = {
     # 23 Oct 2026 (the house, after the autosave before the basement): the renderer's frame
@@ -134,10 +201,11 @@ FIXES = {
 }
 
 
-def image_patches(elf_path, out_path, patches):
+def image_patches(elf_path, out_path, patches, applied=None):
     """Writes the chosen changes ({name: changes}, from CHEATS and FIXES) as a G3PATCH2 file for
     the runtime's --patches (src/probe.c apply_patches) and returns its path, or None. A change
-    whose original bytes are not in this executable (another version) is left out with a message."""
+    whose original bytes are not in this executable (another version) is left out with a message.
+    The names of the changes written are added to `applied`."""
     import struct
     elf = elf_path.read_bytes()
     phoff, = struct.unpack_from("<Q", elf, 0x20)
@@ -145,7 +213,7 @@ def image_patches(elf_path, out_path, patches):
     segments = []
     for i in range(phnum):
         kind, _, offset, vaddr, _, filesz, _, _ = struct.unpack_from("<IIQQQQQQ", elf, phoff + i * phentsize)
-        if kind == 1:
+        if kind in (1, 0x61000010):  # PT_LOAD and PT_SCE_RELRO (the memory map table)
             segments.append((vaddr, offset, filesz))
 
     def read(vaddr, size):
@@ -161,6 +229,8 @@ def image_patches(elf_path, out_path, patches):
             print(f"Patches: '{name}' left out: this executable is not version 01.11's at {differ[0]:#x}")
             continue
         entries += [(at, bytes.fromhex(replacement)) for at, _, replacement in changes if replacement]
+        if applied is not None:
+            applied.add(name)
         print(f"Patches: {name} on")
     if not entries:
         return None
@@ -346,15 +416,35 @@ def main():
         patches["job-sleep"] = JOB_SLEEP
     if os.environ.get("TLOU_PRO_SHADOWS") != "0":
         patches["pro-shadows"] = PRO_SHADOWS
+    chosen = os.environ.get("TLOU_RESOLUTION") or ini_value(Path(env["GOW3_CONFIG"]), "output_res")
+    size = parse_size(chosen) or RENDER_DEFAULT
+    if chosen and not parse_size(chosen):
+        print(f"Resolution: '{chosen}' is not <width>x<height>; the game's own 1920x1080")
+    resolution_patch = f"resolution {size[0]}x{size[1]}"
+    extra = render_extra_mib(size)
+    if size != RENDER_DEFAULT:
+        patches[resolution_patch] = render_size_patch(size, extra)
     for name in [c.strip() for c in os.environ.get("TLOU_CHEATS", "flashlight").split(",") if c.strip()]:
         if name in CHEATS:
             patches[name] = CHEATS[name]
         elif name != "none":
             print(f"Cheats: unknown '{name}' (known: {', '.join(CHEATS)})")
+    applied = set()
     if patches:
-        patch_file = image_patches(out / "eboot.elf", out / "patches.bin", patches)
+        patch_file = image_patches(out / "eboot.elf", out / "patches.bin", patches, applied)
         if patch_file:
             command += ["--patches", str(patch_file)]
+    if resolution_patch not in applied:
+        size, extra = RENDER_DEFAULT, 0
+    elif extra:
+        env["GOW3_DMEM_REPORT_MB"] = str(4608 + extra)
+        pool = int(env.get("GOW3_DMEM_MB", "0") or 0)
+        env["GOW3_DMEM_MB"] = str(max(pool, 4608 + extra + 448))
+    # The host's renderer follows the game's own size (no host scaling of its render targets), and
+    # the in-game menu shows it.
+    env["GOW3_GAME_RESOLUTION"] = f"{size[0]}x{size[1]}"
+    print(f"Resolution: the game draws at {size[0]}x{size[1]}"
+          + (f" ({extra} MiB more for its render targets)" if extra else ""), flush=True)
     if red_zone:
         command += ["--red-zone", str(red_zone)]
     if not args.boot:

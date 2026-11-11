@@ -474,6 +474,16 @@ void ImageTab() {
     ImGui::SeparatorText("Information");
     if (BeginRows("##image_info")) {
         char text[96];
+        // The size the game draws its 3D scene at (the launcher's Resolution, set at start).
+        if (const char* game = std::getenv("GOW3_GAME_RESOLUTION"); game && game[0]) {
+            int gw = 0, gh = 0;
+            if (std::sscanf(game, "%dx%d", &gw, &gh) == 2) {
+                std::snprintf(text, sizeof(text), "%d x %d", gw, gh);
+                InfoRow("Render resolution", text);
+                Help("The launcher's Resolution: the game draws its 3D scene at this size. "
+                     "Changed in the launcher, on the next start.");
+            }
+        }
         std::snprintf(text, sizeof(text), "%d x %d", iw, ih);
         InfoRow("Game image", text);
         std::snprintf(text, sizeof(text), "%d x %d", ww, wh);

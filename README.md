@@ -93,6 +93,13 @@ the launcher.
    seconds. With the game closed, move the folder, then link it back:
    `mklink /J analysis\tlou-user\cache <folder on the SSD>` (in `cmd`).
 
+The launcher's Resolution is the size the game draws at (from 1280x720 to 3840x2160, any
+`<width>x<height>` in `output_res` of `tlou.ini`; `TLOU_RESOLUTION` overrides it): the game's own
+table of render sizes, which the PS4 Pro used, is patched at start, and above 1080p its render
+targets get more GPU memory, as on a PS4 Pro. It takes effect on the next start; the in-game menu
+shows it under Image > Information. Higher sizes cost GPU time (a GTX 1050 Ti Mobile: about 15 FPS
+at 3840x2160).
+
 The launcher sets the display, frame limit and folders, in nine languages; its Debug menu switches
 each optimization off, some of them while the game runs. The in-game menu (Insert, or R3+L2 on a
 controller) holds the graphics, controls and frame rate settings.

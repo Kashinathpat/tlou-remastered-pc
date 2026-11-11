@@ -32,7 +32,9 @@ FPS = ["30", "40", "45", "50", "55", "60", "75", "90", "100", "120"]
 DISPLAY = {"borderless": "borderless", "fullscreen": "fullscreen", "windowed": "windowed"}   # text key: value
 UPSCALERS = {"off": "off", "FSR 3": "fsr3", "TAA": "taa", "DLSS": "dlss"}
 PRESETS = {"q_native": "0", "q_quality": "1", "q_balanced": "2", "q_performance": "3", "q_ultra": "4"}
-RESOLUTIONS = ["1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"]
+# The size the game draws at (output_res in tlou.ini; tools/probe_tlou.py patches the game's
+# render size to it at start).
+RESOLUTIONS = ["1280x720", "1600x900", "1920x1080", "2560x1440", "2880x1620", "3200x1800", "3840x2160"]
 DEFAULT_SWITCHES = {"motion_blur": False, "job_sleep": True, "profile": False, "background_shaders": True,
                     "pro_shadows": True}
 DEFAULT_LANGUAGE = "en"

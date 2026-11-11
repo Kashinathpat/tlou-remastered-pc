@@ -187,6 +187,15 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
+        // Kept as written (the launcher's Resolution may be a size the host list lacks): the
+        // settings file is saved with it unchanged.
+        v.output_res_text = value;
+        // GOW3_GAME_RESOLUTION: the game itself draws at that size (a patch, tools/probe_tlou.py);
+        // the host keeps its render targets at the game's size, no scaling of its own.
+        if (const char* game = std::getenv("GOW3_GAME_RESOLUTION"); game && game[0]) {
+            v.output_res = OutputDefault;
+            return;
+        }
         for (int r = 0; r < OutputCount; ++r) {
             if (value == std::to_string(OutputWidths[r]) + "x" + std::to_string(OutputHeights[r])) {
                 v.output_res = r;
@@ -399,7 +408,11 @@ KeyValues Current() {
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()),
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
-    Append(text, "output_res=%dx%d\n", OutputWidths[v.output_res], OutputHeights[v.output_res]);
+    if (!v.output_res_text.empty() && std::getenv("GOW3_GAME_RESOLUTION")) {
+        Append(text, "output_res=%s\n", v.output_res_text.c_str());
+    } else {
+        Append(text, "output_res=%dx%d\n", OutputWidths[v.output_res], OutputHeights[v.output_res]);
+    }
     Append(text,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"
                  "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_scale=%d\noverlay_corner=%d\n"
