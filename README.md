@@ -72,7 +72,8 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
       the compute subgroup size fixed (`GOW3_SUBGROUP_PIN=0`), and sample shading left out on
       one-sample draws (`GOW3_SAMPLE_SHADING_1X=1`).
     The UHD 630 then plays (about 10 FPS at 1080p; 3 replays of 5 minutes without a device loss,
-    where all 3 lost it before). The shader cache is rebuilt once on such a GPU. Three cloth shaders still have barriers in such ifs, inside loops (`106beafd`,
+    where all 3 lost it before). With these changes an Intel Arc card was reported to run well,
+    with no crash in the session played. The shader cache is rebuilt once on such a GPU. Three cloth shaders still have barriers in such ifs, inside loops (`106beafd`,
     `e44070db`, `20c1dc43`); they did not hang it in the replays tried.
   - Soft shadows can look detached from objects, with a thin light outline around them and little
     darkening where they touch the ground, most visibly under vehicle wheels. The same spot on a
