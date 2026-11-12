@@ -1224,6 +1224,44 @@ DEPTH_TEXT = {
 }
 for _code, _value in DEPTH_TEXT.items():
     TEXTS[_code]["quarter_depth"] = _value
+# What each option of the main screen does, shown by its (i) icon. Languages without their own
+# texts show the English ones.
+INFO_TEXT = {
+    "pt": {
+        "ui_language": "Idioma deste launcher. O idioma do jogo vem da sua cópia (região do disco).",
+        "display": "Sem borda: janela do tamanho da tela, troca rápida com Alt+Tab. Tela cheia: modo exclusivo. Janela: janela comum.",
+        "resolution": "Tamanho em que o jogo desenha a cena. Acima de 1080p fica mais nítido e mais pesado; ao trocar, parte dos shaders recompila uma vez.",
+        "fps": "Limite de quadros por segundo. 30 deixa o ritmo mais estável em PCs fracos.",
+        "upscaler": "Desenha a cena menor e amplia para a tela (FSR 3, DLSS em placas NVIDIA RTX, ou TAA). Desligado: tamanho nativo.",
+        "quality": "Quanto o upscaler reduz a cena antes de ampliar: Qualidade reduz pouco, Ultra desempenho reduz mais (mais FPS, menos nitidez).",
+        "vsync": "Sincroniza com a taxa do monitor: sem cortes na imagem, mas com um pouco mais de atraso nos comandos.",
+        "show_fps": "Mostra no canto da tela o FPS, o tempo de quadro e o uso de GPU, CPU e memória.",
+        "ambient_half": "Desenha as sombras suaves de contato (personagens, veículos, objetos) em meia resolução em vez de um quarto: o contorno claro onde pés e rodas tocam o chão fica com metade da largura. Custa um pouco de desempenho.",
+        "quarter_depth": "Mistura essas sombras usando a profundidade do mesmo pixel em que foram calculadas, em vez da do pixel mais distante: menos contorno claro ou escuro na borda dos personagens. Sem custo perceptível.",
+        "motion_blur": "Desfoque de movimento do jogo ao girar a câmera e em objetos rápidos.",
+        "job_sleep": "As threads de trabalho do jogo dormem quando não há tarefa, em vez de ficarem girando: menos uso de CPU e calor, mesmo desempenho.",
+        "profile": "Grava um perfil de desempenho para diagnóstico de problemas (cerca de 10% menos FPS). Deixe desligado para jogar.",
+        "background_shaders": "Compila shaders novos em segundo plano: menos travadas, mas algum objeto pode aparecer um instante depois. Desligado: o jogo espera cada shader.",
+        "pro_shadows": "Sombras do sol e das luzes em resolução maior, como no PS4 Pro: mais nítidas e um pouco mais pesadas.",
+    },
+    "en": {
+        "ui_language": "This launcher's language. The game's language comes from your copy (the disc's region).",
+        "display": "Borderless: a screen-sized window, quick Alt+Tab. Fullscreen: exclusive mode. Windowed: a normal window.",
+        "resolution": "The size the game draws its scene at. Above 1080p it is sharper and heavier; after a change some shaders compile once.",
+        "fps": "Frame rate limit. 30 keeps the pace steadier on slower PCs.",
+        "upscaler": "Draws the scene smaller and scales it to the screen (FSR 3, DLSS on NVIDIA RTX cards, or TAA). Off: native size.",
+        "quality": "How much the upscaler shrinks the scene first: Quality a little, Ultra performance the most (more FPS, less sharpness).",
+        "vsync": "Syncs to the monitor's refresh rate: no tearing, slightly more input delay.",
+        "show_fps": "Shows the FPS, frame time and GPU, CPU and memory use in a corner of the screen.",
+        "ambient_half": "Draws the soft contact shadows (characters, vehicles, props) at half resolution instead of a quarter: the light outline where feet and wheels touch the ground is half as wide. Costs some performance.",
+        "quarter_depth": "Blends those shadows with the depth of the pixel they were computed at instead of the farthest one: less light or dark outline along characters' edges. No noticeable cost.",
+        "motion_blur": "The game's motion blur when turning the camera and on fast objects.",
+        "job_sleep": "The game's worker threads sleep when they have nothing to do instead of spinning: less CPU use and heat, same performance.",
+        "profile": "Records a performance profile to diagnose problems (about 10% fewer FPS). Keep it off to play.",
+        "background_shaders": "Compiles new shaders in the background: fewer stutters, but an object may appear a moment late. Off: the game waits for each shader.",
+        "pro_shadows": "Sun and light shadows at a higher resolution, as on a PS4 Pro: sharper and a little heavier.",
+    },
+}
 # Updates from the GitHub releases (launcher/updater.py): {} is the version, then the size in MB.
 UPDATE_KEYS = "update_button update_available update_confirm update_downloading update_installing update_failed update_close_game".split()
 UPDATE_TABLE = {
@@ -1971,6 +2009,7 @@ class Launcher(tk.Tk):
         self.ui_labels = {name: code for code, name in UI_LANGUAGES.items()}
         self.ui_language = self.choice(panel, row, self.t("ui_language"), list(self.ui_labels),
                                        UI_LANGUAGES[self.language], self.change_language)
+        self.info(panel, row, "ui_language")
         row = self.section(panel, row + 1, self.t("video"))
         self.display_labels = self.labels(DISPLAY)
         self.display = self.choice(panel, row, self.t("display"), list(self.display_labels),
@@ -1990,12 +2029,26 @@ class Launcher(tk.Tk):
         self.show_fps = self.check(panel, row + 6, self.t("show_fps"), ini.get("show_fps", "1") == "1")
         self.ambient_half = self.check(panel, row + 7, self.t("ambient_half"), switches["ambient_half"])
         self.quarter_depth = self.check(panel, row + 8, self.t("quarter_depth"), switches["quarter_depth"])
+        self.info(panel, row, "display")
+        self.info(panel, row + 1, "resolution")
+        self.info(panel, row + 2, "fps")
+        self.info(panel, row + 3, "upscaler")
+        self.info(panel, row + 4, "quality")
+        self.info(panel, row + 5, "vsync")
+        self.info(panel, row + 6, "show_fps")
+        self.info(panel, row + 7, "ambient_half")
+        self.info(panel, row + 8, "quarter_depth")
         row = self.section(panel, row + 9, self.t("game"))
         self.motion_blur = self.check(panel, row, self.t("motion_blur"), switches["motion_blur"])
         self.job_sleep = self.check(panel, row + 1, self.t("job_sleep"), switches["job_sleep"])
         self.profile = self.check(panel, row + 2, self.t("profile"), switches["profile"])
         self.background_shaders = self.check(panel, row + 3, self.t("background_shaders"), switches["background_shaders"])
         self.pro_shadows = self.check(panel, row + 4, self.t("pro_shadows"), switches["pro_shadows"])
+        self.info(panel, row, "motion_blur")
+        self.info(panel, row + 1, "job_sleep")
+        self.info(panel, row + 2, "profile")
+        self.info(panel, row + 3, "background_shaders")
+        self.info(panel, row + 4, "pro_shadows")
 
         self.play_button = tk.Button(self, text=self.t("play"), command=self.play, bg=ACCENT, fg=BG,
                                      activebackground=ACCENT_HOT, activeforeground=BG, bd=0, relief="flat",
@@ -2052,6 +2105,37 @@ class Launcher(tk.Tk):
                        activebackground=BG, activeforeground=TEXT, font=("Segoe UI", 10), bd=0,
                        highlightthickness=0, anchor="w").grid(row=row, column=0, columnspan=2, sticky="w")
         return variable
+
+    def info(self, parent, row, key):
+        """A small (i) beside a main-screen option; hovering it shows what the option does."""
+        texts = INFO_TEXT.get(self.language, INFO_TEXT["en"])
+        text = texts.get(key) or INFO_TEXT["en"].get(key)
+        if not text:
+            return
+        icon = tk.Label(parent, text="ⓘ", bg=BG, fg=MUTED, font=("Segoe UI", 10), cursor="question_arrow")
+        icon.grid(row=row, column=2, sticky="e", padx=(6, 0))
+        tip = {}
+
+        def show(_):
+            window = tk.Toplevel(self)
+            window.wm_overrideredirect(True)
+            window.attributes("-topmost", True)
+            tk.Label(window, text=text, bg=PANEL, fg=TEXT, font=("Segoe UI", 9), justify="left",
+                     wraplength=320, padx=10, pady=7, bd=1, relief="solid").pack()
+            window.update_idletasks()
+            x = icon.winfo_rootx() + icon.winfo_width() + 8
+            y = icon.winfo_rooty() - 4
+            window.wm_geometry(f"+{x}+{y}")
+            icon.configure(fg=ACCENT)
+            tip["window"] = window
+
+        def hide(_):
+            if tip.get("window"):
+                tip.pop("window").destroy()
+            icon.configure(fg=MUTED)
+
+        icon.bind("<Enter>", show)
+        icon.bind("<Leave>", hide)
 
     def link(self, canvas, x, text, command):
         item = canvas.create_text(x, self.HEIGHT - 26, text=text, anchor="e", fill=ACCENT, font=("Segoe UI", 9, "underline"))
