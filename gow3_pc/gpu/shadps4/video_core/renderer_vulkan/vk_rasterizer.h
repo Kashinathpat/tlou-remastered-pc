@@ -554,6 +554,25 @@ private:
     /// frames, then one of 25-35 ms). Opt-in, GOW3_OPEN_RAYCAST_READBACKS=1: measured on the
     /// rooftops it removed the faults on ray-cast pages but not the uneven frames (18 Oct).
     std::vector<std::pair<VAddr, u64>> eop_open_readbacks;
+    /// gow3 12 Nov 2026 (GitHub #29, #45): The Last of Us's mesh ray casts (meshraycaster.cpp:
+    /// bullet impacts, characters' foot probes). Cs_RayTraceGatherHits writes a batch's closest
+    /// hits (16 rays, 64 bytes each) and Cs_MemCpy (82c46b8b) copies that 1 KiB block to a GPU
+    /// buffer and from there into the batch object, which the CPU reads once the batch's
+    /// end-of-pipe counter lands (HandleResults, eboot 1.11 0xb5b1e0). Read before the GPU wrote
+    /// it, the game took another batch's hits: bullets left no mark or effect where they hit, a
+    /// firefly pendant could not be shot down, NPCs' feet were placed at wrong heights (they moved
+    /// in jumps). The last GatherHits outputs and the copies' destinations, to recognise both
+    /// copies, which are always read back at the next event (eop_readbacks), whatever
+    /// GOW3_TLOU_MEMCPY_READBACK says and past the 256-per-event cap.
+    std::array<VAddr, 32> raycast_results{};
+    u32 raycast_results_next = 0;
+    /// gow3 12 Nov 2026 diagnostics (GOW3_RAYCAST_DIAG=1): mesh ray-cast results waiting to be
+    /// counted at the next event, and how many of their copies were read back.
+    std::vector<std::pair<VAddr, u64>> raycast_diag_outputs;
+    u32 raycast_diag_copies_read = 0;
+    u32 raycast_diag_copies_relaxed = 0;
+    u32 raycast_diag_described = 0;
+    void ReportRaycastDiag();
     /// gow3 25 Oct 2026: small GPU-side DMA copies into guest memory waiting for their readback
     /// (ReadBackDmaResults); copies since the last label (statistics).
     std::vector<std::pair<VAddr, u64>> dma_results;

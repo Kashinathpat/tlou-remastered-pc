@@ -967,6 +967,9 @@ static bool DmaEopReadbacks() {
 /// with it they did not, at the same ~36-38 FPS (the precise session ran at ~32). An earlier
 /// test with CPU data watches on sampled copies saw no reads: it only ever sampled the first
 /// copies of a frame, into another ring (GOW3_RESULT_WATCH has the same bias).
+/// 12 Nov 2026 (GOW3_RAYCAST_DIAG): the jumps came from the mesh ray casts' results, which reach
+/// the CPU through two 1 KiB copies: the characters' foot probes (character-leg-raycaster.cpp)
+/// read other rays' hits. Those copies are read back without this switch too (raycast_results).
 /// GOW3_TLOU_MEMCPY_READBACK=0 turns it off.
 static bool TlouMemCpyEopReadback() {
     static const bool enabled = [] {
@@ -975,6 +978,22 @@ static bool TlouMemCpyEopReadback() {
         std::printf("Cs_MemCpy (82c46b8b) end-of-pipe readbacks: %s\n", on ? "on" : "off");
         std::fflush(stdout);
         return on;
+    }();
+    return enabled;
+}
+
+/// gow3 12 Nov 2026: The Last of Us's Cs_RayTraceGatherHits (update 1.11, base game 1.00): the
+/// closest hit of each of a batch's (up to 16) mesh ray casts, 64 bytes per ray.
+static bool IsRayTraceGatherHits(u64 hash) {
+    return hash == 0xc360dc8b || hash == 0x0e1af70f;
+}
+
+/// Diagnostics (GOW3_RAYCAST_DIAG=1, with src/runtime_raycast_diag.c on the CPU side): the hits
+/// the GPU wrote, counted at the next event after waiting for them.
+static bool RaycastDiag() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("GOW3_RAYCAST_DIAG");
+        return env && env[0] == '1';
     }();
     return enabled;
 }
@@ -3685,7 +3704,43 @@ void Rasterizer::SyncDmaMemory(const Shader::Info* stage) {
     }
 }
 
+void Rasterizer::ReportRaycastDiag() {
+    std::erase_if(raycast_diag_outputs, [this](const auto& r) { return !IsMapped(r.first, r.second); });
+    if (!raycast_diag_outputs.empty()) {
+        buffer_cache.DownloadRanges(raycast_diag_outputs); // waits for the GPU
+    }
+    static u64 outputs = 0, slots = 0, hits = 0;
+    static auto last = std::chrono::steady_clock::now();
+    auto* memory = Core::Memory::Instance();
+    for (const auto& [address, size] : raycast_diag_outputs) {
+        ++outputs;
+        for (u64 at = 0; at + 64 <= size && at < 16 * 64; at += 64) {
+            float t = 0.0f;
+            if (!memory->TryReadBacking(address + at + 20, &t, sizeof(t))) {
+                std::memcpy(&t, reinterpret_cast<const void*>(address + at + 20), sizeof(t));
+            }
+            ++slots;
+            hits += t > 0.0f;
+        }
+    }
+    raycast_diag_outputs.clear();
+    if (const auto now = std::chrono::steady_clock::now(); now - last >= std::chrono::seconds(5)) {
+        last = now;
+        std::printf("Ray-cast diag (5 s, GPU side): %llu result blocks, %llu hits written (of %llu ray "
+                    "slots); their copies to the CPU: %u read back, %u not\n",
+                    static_cast<unsigned long long>(outputs), static_cast<unsigned long long>(hits),
+                    static_cast<unsigned long long>(slots), raycast_diag_copies_read,
+                    raycast_diag_copies_relaxed);
+        std::fflush(stdout);
+        outputs = slots = hits = 0;
+        raycast_diag_copies_read = raycast_diag_copies_relaxed = 0;
+    }
+}
+
 bool Rasterizer::ReadBackEopResults(bool protected_only) {
+    if (!raycast_diag_outputs.empty()) {
+        ReportRaycastDiag();
+    }
     if (protected_only && eop_readbacks.empty()) {
         return false;
     }
@@ -5716,8 +5771,27 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     bound_buffers.emplace_back(buffer, offset, tracked_size, desc.is_written);
                 }
                 if (desc.is_written) {
+                    // gow3 12 Nov 2026 (GitHub #29, #45: firefly pendants that cannot be shot
+                    // down, bullets leaving no mark on some walls): Cs_MemCpy copies of the mesh
+                    // ray casts' results are always read back (Rasterizer::raycast_results).
+                    if (IsRayTraceGatherHits(stage.pgm_hash)) {
+                        raycast_results[raycast_results_next++ % raycast_results.size()] =
+                            vsharp.base_address;
+                    }
+                    const bool raycast_copy = compute_stage && stage.pgm_hash == 0x82c46b8b &&
+                                              EopReadbackMode() != 0 && !stage.buffers.empty() &&
+                                              std::ranges::find(raycast_results,
+                                                                stage.buffers[0].GetSharp(stage).base_address) !=
+                                                  raycast_results.end();
+                    if (raycast_copy) {
+                        // The block reaches the batch object through a second copy (GatherHits
+                        // output -> a GPU buffer -> the batch): this copy's destination is a
+                        // result too.
+                        raycast_results[raycast_results_next++ % raycast_results.size()] =
+                            vsharp.base_address;
+                    }
                     const bool exact_result =
-                        IsEopReadbackBinding(stage.pgm_hash, binding.buffer, size);
+                        raycast_copy || IsEopReadbackBinding(stage.pgm_hash, binding.buffer, size);
                     // GOW3_AUTO_EOP_READBACK=1: small compute outputs of any shader too.
                     const bool automatic_result =
                         AutoEopReadback() &&
@@ -5849,7 +5923,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                         }
                     }
                     if ((exact_result || automatic_result) &&
-                        eop_readbacks.size() + eop_open_readbacks.size() < 256) {
+                        (eop_readbacks.size() + eop_open_readbacks.size() < 256 || raycast_copy)) {
                         // The whole bound buffer counts as GPU-written (up to 9 MiB for
                         // 6a6422a9); read back only what this dispatch writes: dword i for
                         // i < min(groups * 64, s6, num_records) (vk_shader_hle.cpp). Only its
@@ -5888,10 +5962,11 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                             }
                             // Every 5 s: how many copies were read back, and how many were too
                             // large (over 64 KiB, left relaxed).
-                            static std::atomic<u32> copies{0}, large{0};
+                            static std::atomic<u32> copies{0}, large{0}, raycasts{0};
                             static std::atomic<u64> bytes{0};
                             static std::atomic<s64> last_report{0};
                             ++(readback_size ? copies : large);
+                            raycasts += raycast_copy && readback_size;
                             bytes += readback_size;
                             const s64 now =
                                 std::chrono::duration_cast<std::chrono::seconds>(
@@ -5899,11 +5974,36 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                     .count();
                             if (s64 last = last_report.load(std::memory_order_relaxed);
                                 now - last >= 5 && last_report.compare_exchange_strong(last, now)) {
-                                std::printf("Cs_MemCpy readbacks (5 s): %u copies, %.1f KiB; %u "
-                                            "larger copies left relaxed\n",
-                                            copies.exchange(0), double(bytes.exchange(0)) / 1024,
-                                            large.exchange(0));
+                                std::printf("Cs_MemCpy readbacks (5 s): %u copies (%u of them mesh "
+                                            "ray-cast results), %.1f KiB; %u larger copies left "
+                                            "relaxed\n",
+                                            copies.exchange(0), raycasts.exchange(0),
+                                            double(bytes.exchange(0)) / 1024, large.exchange(0));
                                 std::fflush(stdout);
+                            }
+                        }
+                    }
+                    // gow3 12 Nov 2026 diagnostics (GOW3_RAYCAST_DIAG=1): the mesh ray casts'
+                    // results and the Cs_MemCpy copy that brings them to the CPU.
+                    if (RaycastDiag() && compute_stage) {
+                        if (IsRayTraceGatherHits(stage.pgm_hash)) {
+                            raycast_diag_outputs.emplace_back(vsharp.base_address, size);
+                        } else if (raycast_copy) {
+                            const VAddr src = stage.buffers[0].GetSharp(stage).base_address;
+                            {
+                                const bool read = std::ranges::any_of(eop_readbacks, [&](const auto& r) {
+                                    return r.first == vsharp.base_address;
+                                });
+                                ++(read ? raycast_diag_copies_read : raycast_diag_copies_relaxed);
+                                if (raycast_diag_described++ < 6) {
+                                    std::printf("Ray-cast diag: results %#llx copied to %#llx (%llu bytes "
+                                                "bound), %s\n",
+                                                static_cast<unsigned long long>(src),
+                                                static_cast<unsigned long long>(vsharp.base_address),
+                                                static_cast<unsigned long long>(size),
+                                                read ? "read back at the next event" : "NOT read back");
+                                    std::fflush(stdout);
+                                }
                             }
                         }
                     }

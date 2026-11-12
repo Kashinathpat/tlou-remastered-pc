@@ -36,6 +36,7 @@
 static unsigned char *image;
 
 void runtime_mouselook_set_image(unsigned char *base) { image = base; }
+unsigned char *runtime_mouselook_image(void) { return image; }
 
 int runtime_mouselook_enabled(void) {
     static int enabled = -1;
@@ -312,9 +313,23 @@ static const MouseLookSite sites[] = {
       0x48, 0x03, 0x00, 0x00, 0x49, 0x89, 0xf4, 0x48},
      24,
      (void *)tlou_aim_input},
+    /* Diagnostics only (GOW3_RAYCAST_DIAG=1, runtime_raycast_diag.c): kept last. */
+    {"The Last of Us Remastered (ray-cast results, diagnostics)",
+     0xb5b1e0,
+     6,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xe4,
+      0xe0, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00},
+     24,
+     (void *)runtime_raycast_diag_results},
 };
 
 const MouseLookSite *runtime_mouselook_sites(unsigned *count) {
+    if (!runtime_raycast_diag_enabled()) {
+        static MouseLookSite plain[sizeof(sites) / sizeof(sites[0]) - 1];
+        memcpy(plain, sites, sizeof(plain));
+        *count = sizeof(plain) / sizeof(plain[0]);
+        return plain;
+    }
     const char *env = getenv("GOW3_MOUSE_LOOK_SITES"); /* debugging: a bit mask of the sites */
     if (env && *env) {
         static MouseLookSite chosen[sizeof(sites) / sizeof(sites[0])];

@@ -23,6 +23,7 @@ typedef struct {
 int runtime_mouselook_enabled(void);
 const MouseLookSite *runtime_mouselook_sites(unsigned *count);
 void runtime_mouselook_set_image(unsigned char *image);
+unsigned char *runtime_mouselook_image(void);
 /* Right stick boost (3 Nov 2026, The Last of Us Remastered 1.11): the game turns the camera no
  * faster than the right stick at full deflection, so a mouse moved fast hit that cap whatever its
  * sensitivity. The pad conversion (0xa4d360: byte / 127 - 1, dead zone 0.08, / 0.84) clamps each
@@ -44,3 +45,6 @@ int runtime_mouselook_camera_recent(void);
 int runtime_mouselook_aim_recent(void);
 /* runtime_pad.c: the aim button (L2) was held at the last pad read. */
 int runtime_pad_aim_held(void);
+/* runtime_raycast_diag.c (GOW3_RAYCAST_DIAG=1): a site at the mesh ray caster's HandleResults. */
+int runtime_raycast_diag_enabled(void);
+__attribute__((sysv_abi)) void *runtime_raycast_diag_results(void *rdi, void *rsi, void *rdx);
