@@ -121,6 +121,8 @@ struct Values {
     /// far the left stick goes while walking.
     std::atomic<bool> walk_toggle{false};
     std::atomic<float> walk_speed{0.5f};
+    /// 11 Nov 2026: the controller vibrates when the game asks (off: scePadSetVibration stops it).
+    std::atomic<bool> vibration{true};
     std::atomic<int> prompts{-1};
     std::atomic<unsigned> controls_generation{0};
     /// The controller shortcut for the in-game menu (GitHub #15: LT + R3 is also the sniper

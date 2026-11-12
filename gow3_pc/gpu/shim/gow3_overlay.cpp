@@ -824,6 +824,7 @@ void ResetControls() {
     s.stick_speed = 1.0f;
     s.walk_toggle = false;
     s.walk_speed = 0.5f;
+    s.vibration = true;
     Gow3Settings::ControlsChanged();
     dirty = true;
     ReloadControls();
@@ -1069,6 +1070,14 @@ void ControlsTab() {
         changed |= PercentRow("Controller camera and aim speed", s.stick_speed, 50, 300,
                               "How fast the right stick turns the camera. It needs the game's camera hooks, not "
                               "available in this game yet: use the game's own camera sensitivity options.");
+        Row("Controller vibration");
+        bool vibration = s.vibration;
+        if (ImGui::Checkbox("##value", &vibration)) {
+            s.vibration = vibration;
+            changed = true;
+        }
+        Help("Off: the controller never vibrates, whatever the game asks.");
+        ImGui::PopID();
         Row("Mouse");
         bool mouse = s.mouse;
         if (ImGui::Checkbox("##value", &mouse)) {

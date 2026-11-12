@@ -149,6 +149,10 @@ controller, at 50% of a full push. The launcher's Controls window and the in-gam
 whether the key is held or switches walking on and off, and how far the stick goes
 (`walk_toggle`, `walk_speed` in tlou.ini; `GOW3_WALK_TOGGLE`, `GOW3_WALK_SPEED`).
 
+**Vibration:** the launcher's Controls window (Controller tab, which also shows a drawn controller
+following the controller and the bound keys) and the in-game menu turn the controller's vibration
+off (`vibration=0` in tlou.ini; `GOW3_VIBRATION=0`).
+
 ## Building
 
 From an MSYS2 **CLANG64** shell:

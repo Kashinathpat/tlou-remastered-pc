@@ -914,12 +914,19 @@ static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) {
     pthread_mutex_unlock(&lock);
     return 0;
 }
+/* 11 Nov 2026: with vibration off in the settings (the launcher's Controller tab, the in-game
+ * menu, GOW3_VIBRATION=0) the motors are stopped instead. Read on every call: turned off with
+ * the menu open, a rumble in progress stops at the game's next request or within its 1 s. */
 static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
+    const int enabled=gow3gpu_controls_vibration();
     pthread_mutex_lock(&lock);
+    static int logged=-1;
+    if (enabled!=logged) { logged=enabled; printf("Runtime: controller vibration %s\n",enabled ? "on" : "off"); }
     SDL_Gamepad *g=current_gamepad();
-    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
+    if (g) SDL_RumbleGamepad(g,enabled ? (uint16_t)(param[0]*257) : 0,enabled ? (uint16_t)(param[1]*257) : 0,
+                             enabled ? 1000 : 0);
     pthread_mutex_unlock(&lock);
     return 0;
 }

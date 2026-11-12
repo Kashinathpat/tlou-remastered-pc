@@ -67,9 +67,9 @@ void gow3gpu_prompts_set_labels(int set, const char *const *labels, int count);
 void gow3gpu_prompts_set_device(int device);
 /* Controls: the in-game menu's Controls tab and the launcher's, kept in the settings file
  * (gow3_settings.h; GOW3_PAD_MAP, GOW3_KEY_MAP, GOW3_MOUSE_MAP, GOW3_MOUSE, GOW3_MOUSE_SENS,
- * GOW3_MOUSE_INVERT, GOW3_PROMPTS, GOW3_STICK_SPEED, GOW3_WALK_TOGGLE and GOW3_WALK_SPEED
- * override the file at start). The pad (src/runtime_pad.c) reapplies them when the generation
- * changes. Maps in runtime_pad.c's syntax on top of its defaults ("" = the defaults). prompts:
+ * GOW3_MOUSE_INVERT, GOW3_PROMPTS, GOW3_STICK_SPEED, GOW3_WALK_TOGGLE, GOW3_WALK_SPEED and
+ * GOW3_VIBRATION override the file at start). The pad (src/runtime_pad.c) reapplies them when
+ * the generation changes. Maps in runtime_pad.c's syntax on top of its defaults ("" = the defaults). prompts:
  * -1 auto, 0 PlayStation, 1 keyboard, 2 Xbox, 3 the connected controller's. stick_speed:
  * controller camera and aim speed. walk_toggle: the walk key (key map "walk") switches walking on
  * and off instead of while held; walk_speed: how far the left stick goes while walking (0..1). */
@@ -88,6 +88,9 @@ float gow3gpu_controls_mouse_vertical(void);
 int gow3gpu_controls_mouse_invert_x(void);
 int gow3gpu_controls_mouse_invert(void);
 float gow3gpu_controls_stick_speed(void);
+/* 11 Nov 2026: the controller's vibration (vibration=0 in the settings: the game's rumble is
+ * not passed on). Read live by scePadSetVibration. */
+int gow3gpu_controls_vibration(void);
 /* The games' draw and shadow distances (menu Image tab, percent of the game's own;
  * src/runtime_gamesettings.c). */
 int gow3gpu_settings_fade_distance(void);

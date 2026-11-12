@@ -88,6 +88,10 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.walk_toggle = i != 0;
         return;
     }
+    if (key == "vibration") {
+        v.vibration = i != 0;
+        return;
+    }
     if (key == "walk_speed") {
         v.walk_speed = f > 0.0f ? Clamp(f, 0.1f, 1.0f) : 0.5f;
         return;
@@ -290,6 +294,7 @@ void Load() {
         {"GOW3_MOUSE_INVERT_X", "mouse_invert_x"},
         {"GOW3_PROMPTS", "prompts"},                  {"GOW3_STICK_SPEED", "stick_speed"},
         {"GOW3_WALK_TOGGLE", "walk_toggle"},          {"GOW3_WALK_SPEED", "walk_speed"},
+        {"GOW3_VIBRATION", "vibration"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env); value && value[0]) {
@@ -452,7 +457,8 @@ KeyValues Current() {
            v.stick_speed.load());
     Append(text, "mouse_aim_sens=%.2f\nmouse_vertical=%.2f\nmouse_invert_x=%d\n", v.mouse_aim_sens.load(),
            v.mouse_vertical.load(), int(v.mouse_invert_x.load()));
-    Append(text, "walk_toggle=%d\nwalk_speed=%.2f\n", int(v.walk_toggle.load()), v.walk_speed.load());
+    Append(text, "walk_toggle=%d\nwalk_speed=%.2f\nvibration=%d\n", int(v.walk_toggle.load()), v.walk_speed.load(),
+           int(v.vibration.load()));
     {
         std::scoped_lock lock{ControlsMutex()};
         text += "pad_map=" + v.pad_map + "\nkey_map=" + v.key_map + "\nmouse_map=" + v.mouse_map + "\n";
@@ -557,6 +563,10 @@ extern "C" int gow3gpu_controls_mouse_invert_x(void) {
 
 extern "C" float gow3gpu_controls_stick_speed(void) {
     return Gow3Settings::Get().stick_speed;
+}
+
+extern "C" int gow3gpu_controls_vibration(void) {
+    return Gow3Settings::Get().vibration ? 1 : 0;
 }
 
 extern "C" int gow3gpu_settings_fade_distance(void) {

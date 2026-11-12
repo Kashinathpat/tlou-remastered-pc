@@ -9,9 +9,11 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import random
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -909,6 +911,38 @@ CONTROL_TEXT = {
                                 'Rotella su', 'Kółko myszy w górę', 'Колесо мыши вверх', 'ホイール上'),
     'Roda do mouse para baixo': ('Mouse wheel down', 'Rueda del ratón abajo', 'Molette vers le bas', 'Mausrad runter',
                                  'Rotella giù', 'Kółko myszy w dół', 'Колесо мыши вниз', 'ホイール下'),
+    'Controle': ('Controller', 'Mando', 'Manette', 'Controller', 'Controller', 'Pad', 'Геймпад', 'コントローラー'),
+    'Mexa no controle ou aperte as teclas e os botões do mouse configurados: o desenho mostra cada comando.': (
+        'Move the controller or press the bound keys and mouse buttons: the drawing shows each input.',
+        'Mueve el mando o pulsa las teclas y botones del ratón asignados: el dibujo muestra cada entrada.',
+        'Bougez la manette ou appuyez sur les touches et boutons de souris assignés : le dessin montre chaque commande.',
+        'Bewege den Controller oder drücke die belegten Tasten und Maustasten: die Zeichnung zeigt jede Eingabe.',
+        'Muovi il controller o premi i tasti e i pulsanti del mouse assegnati: il disegno mostra ogni comando.',
+        'Porusz padem lub naciśnij przypisane klawisze i przyciski myszy: rysunek pokazuje każde wejście.',
+        'Подвигайте геймпад или нажмите назначенные клавиши и кнопки мыши: рисунок показывает каждое нажатие.',
+        'コントローラーを動かすか、割り当てたキーやマウスボタンを押すと、図に入力が表示されます。'),
+    'Controle conectado: {}': ('Controller connected: {}', 'Mando conectado: {}', 'Manette connectée : {}',
+                               'Controller verbunden: {}', 'Controller collegato: {}', 'Pad podłączony: {}',
+                               'Геймпад подключён: {}', 'コントローラー接続中: {}'),
+    'Nenhum controle conectado.': ('No controller connected.', 'Ningún mando conectado.', 'Aucune manette connectée.',
+                                   'Kein Controller verbunden.', 'Nessun controller collegato.',
+                                   'Brak podłączonego pada.', 'Геймпад не подключён.',
+                                   'コントローラーが接続されていません。'),
+    'Leitura do controle indisponível (SDL3.dll não encontrado).': (
+        'Controller reading unavailable (SDL3.dll not found).',
+        'Lectura del mando no disponible (no se encontró SDL3.dll).',
+        'Lecture de la manette indisponible (SDL3.dll introuvable).',
+        'Controller kann nicht gelesen werden (SDL3.dll nicht gefunden).',
+        'Lettura del controller non disponibile (SDL3.dll non trovato).',
+        'Odczyt pada niedostępny (nie znaleziono SDL3.dll).',
+        'Чтение геймпада недоступно (SDL3.dll не найден).',
+        'コントローラーを読み取れません (SDL3.dll が見つかりません)。'),
+    'Vibração do controle': ('Controller vibration', 'Vibración del mando', 'Vibration de la manette',
+                             'Controller-Vibration', 'Vibrazione del controller', 'Wibracje pada',
+                             'Вибрация геймпада', 'コントローラーの振動'),
+    'Vibração': ('Vibration', 'Vibración', 'Vibration', 'Vibration', 'Vibrazione', 'Wibracje', 'Вибрация', '振動'),
+    'Testar vibração': ('Test vibration', 'Probar vibración', 'Tester la vibration', 'Vibration testen',
+                        'Prova vibrazione', 'Testuj wibracje', 'Проверить вибрацию', '振動をテスト'),
 }
 
 # The art is the player's own dump's (sce_sys), read at run time: no game file in the repository.
@@ -1477,6 +1511,262 @@ def key_for(options, value, fallback):
     return next((label for label, v in options.items() if v == value), fallback)
 
 
+# The Controller tab reads the controller with the game's own SDL3 (gow3_pc/out in a package,
+# MSYS2's CLANG64 in a source tree), and only while the tab is shown.
+SDL_INIT_GAMEPAD = 0x2000
+# SDL_GamepadButton 0..14 (south east west north back guide start, sticks, shoulders, d-pad) and 20.
+SDL_BUTTONS = ("cross", "circle", "square", "triangle", "share", "ps", "options", "l3", "r3", "l1", "r1",
+               "up", "down", "left", "right")
+SDL_TOUCHPAD, SDL_MISC1 = 20, 15   # MISC1: Share/Capture on Xbox Series pads, the game's shake
+
+
+def sdl_candidates():
+    yield ROOT / "gow3_pc/out/SDL3.dll"
+    yield Path(os.environ.get("MSYS2_ROOT", "C:/msys64")) / "clang64/bin/SDL3.dll"
+
+
+class PadReader:
+    """The first connected controller through SDL3. ready is False without SDL3.dll."""
+    sdl = None
+
+    @classmethod
+    def library(cls):
+        if cls.sdl is None:
+            cls.sdl = False
+            for path in sdl_candidates():
+                if not path.is_file():
+                    continue
+                try:
+                    sdl = ctypes.CDLL(str(path))
+                except OSError:
+                    continue
+                c = ctypes
+                for name, result, arguments in (
+                        ("SDL_SetHint", c.c_bool, [c.c_char_p, c.c_char_p]),
+                        ("SDL_InitSubSystem", c.c_bool, [c.c_uint32]), ("SDL_QuitSubSystem", None, [c.c_uint32]),
+                        ("SDL_GetGamepads", c.POINTER(c.c_uint32), [c.POINTER(c.c_int)]), ("SDL_free", None, [c.c_void_p]),
+                        ("SDL_OpenGamepad", c.c_void_p, [c.c_uint32]), ("SDL_CloseGamepad", None, [c.c_void_p]),
+                        ("SDL_GamepadConnected", c.c_bool, [c.c_void_p]), ("SDL_GetGamepadName", c.c_char_p, [c.c_void_p]),
+                        ("SDL_UpdateGamepads", None, []), ("SDL_FlushEvents", None, [c.c_uint32, c.c_uint32]),
+                        ("SDL_GetGamepadButton", c.c_bool, [c.c_void_p, c.c_int]),
+                        ("SDL_GetGamepadAxis", c.c_int16, [c.c_void_p, c.c_int]),
+                        ("SDL_RumbleGamepad", c.c_bool, [c.c_void_p, c.c_uint16, c.c_uint16, c.c_uint32])):
+                    function = getattr(sdl, name)
+                    function.restype, function.argtypes = result, arguments
+                cls.sdl = sdl
+                break
+        return cls.sdl or None
+
+    def __init__(self):
+        self.pad = None
+        sdl = self.library()
+        self.ready = False
+        if sdl:
+            # No SDL window here: without this a controller is read only while one has focus.
+            sdl.SDL_SetHint(b"SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", b"1")
+            self.ready = bool(sdl.SDL_InitSubSystem(SDL_INIT_GAMEPAD))
+
+    def state(self):
+        """(name, {pressed buttons}, (lx, ly, rx, ry) in -1..1, (l2, r2) in 0..1), or None without a controller."""
+        if not self.ready:
+            return None
+        sdl = self.sdl
+        sdl.SDL_UpdateGamepads()            # also finds controllers connected since
+        sdl.SDL_FlushEvents(0, 0xFFFF)      # nobody reads the event queue here
+        if self.pad and not sdl.SDL_GamepadConnected(self.pad):
+            sdl.SDL_CloseGamepad(self.pad)
+            self.pad = None
+        if not self.pad:
+            count = ctypes.c_int(0)
+            ids = sdl.SDL_GetGamepads(ctypes.byref(count))
+            if ids:
+                if count.value > 0:
+                    self.pad = sdl.SDL_OpenGamepad(ids[0])
+                sdl.SDL_free(ids)
+            if not self.pad:
+                return None
+        pad = self.pad
+        pressed = {name for i, name in enumerate(SDL_BUTTONS) if sdl.SDL_GetGamepadButton(pad, i)}
+        if sdl.SDL_GetGamepadButton(pad, SDL_TOUCHPAD):
+            pressed.add("touchpad")
+        if sdl.SDL_GetGamepadButton(pad, SDL_MISC1):
+            pressed.add("shake")
+        axes = tuple(max(-1.0, sdl.SDL_GetGamepadAxis(pad, i) / 32767) for i in range(4))
+        triggers = tuple(max(0.0, sdl.SDL_GetGamepadAxis(pad, i) / 32767) for i in (4, 5))
+        name = (sdl.SDL_GetGamepadName(pad) or b"").decode("utf-8", "replace")
+        return name, pressed, axes, triggers
+
+    def rumble(self, seconds):
+        if self.ready and self.pad:
+            self.sdl.SDL_RumbleGamepad(self.pad, 0xC000, 0xC000, int(seconds * 1000))
+
+    def close(self):
+        if self.ready:
+            if self.pad:
+                self.sdl.SDL_RumbleGamepad(self.pad, 0, 0, 0)
+                self.sdl.SDL_CloseGamepad(self.pad)
+            self.sdl.SDL_QuitSubSystem(SDL_INIT_GAMEPAD)
+        self.pad, self.ready = None, False
+
+
+def rounded(canvas, x0, y0, x1, y1, r, **options):
+    """A rounded rectangle (a smoothed polygon)."""
+    points = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1, x0, y1,
+              x0, y1 - r, x0, y0 + r, x0, y0]
+    return canvas.create_polygon(points, smooth=True, **options)
+
+
+class PadView:
+    """The Controller tab's drawing: a controller whose buttons light up, sticks move and triggers
+    fill. show() takes the combined state of the controller and the bound keys."""
+    W, H = 720, 360
+    FACE = {"triangle": "#4fd1a5", "circle": "#ff6b6b", "cross": "#7fa8ff", "square": "#e88bd7"}
+    LIT_DIM = "#4a3517"   # the accent, dimmed: lit areas that carry text or other marks
+    STICK_TRAVEL = 16
+
+    def __init__(self, parent):
+        c = self.canvas = tk.Canvas(parent, width=self.W, height=self.H, bg=PANEL, highlightthickness=0,
+                                    takefocus=1)
+        self.lights = {}    # name: [(item, idle options, lit options)]
+        self.lit = {}
+        self.offset = [0, 0]
+        self.shake_until = 0.0
+        self.sticks, self.triggers = {}, {}
+        self.build()
+
+    def light(self, name, item, idle, lit):
+        self.canvas.itemconfigure(item, **idle)
+        self.lights.setdefault(name, []).append((item, idle, lit))
+
+    def build(self):
+        c, W = self.canvas, self.W
+        left = [(360, 92), (250, 88), (178, 82), (140, 98), (116, 150), (100, 240), (98, 300), (116, 340),
+                (156, 346), (186, 326), (222, 282), (268, 266), (360, 264)]
+        outline = left + [(W - x, y) for x, y in reversed(left[1:-1])]
+        flat = [v for point in outline for v in point]
+        c.create_polygon([v + (6 if i % 2 == 0 else 8) for i, v in enumerate(flat)], smooth=True, splinesteps=24,
+                         fill="#050505")
+        c.create_polygon(flat, smooth=True, splinesteps=24, fill="#1c1c1c", outline="#303030", width=2)
+        small = ("Segoe UI Semibold", 8)
+        tiny = ("Segoe UI", 7)
+
+        # Triggers (a gauge that fills) and shoulder buttons.
+        for side, x0 in (("l", 150), ("r", W - 250)):
+            rounded(c, x0, 18, x0 + 100, 46, 10, fill="#121212", outline="#303030", width=2)
+            bar = c.create_rectangle(x0 + 4, 22, x0 + 4, 42, fill=ACCENT, width=0)
+            self.triggers[side + "2"] = (bar, x0 + 4, x0 + 96)
+            label = c.create_text(x0 + 50, 32, text=side.upper() + "2", font=small)
+            self.light(side + "2", label, {"fill": MUTED}, {"fill": BG})
+            bumper = rounded(c, x0, 56, x0 + 100, 78, 10, width=2)
+            self.light(side + "1", bumper, {"fill": "#252525", "outline": "#333333"}, {"fill": ACCENT, "outline": ACCENT_HOT})
+            label = c.create_text(x0 + 50, 67, text=side.upper() + "1", font=small)
+            self.light(side + "1", label, {"fill": MUTED}, {"fill": BG})
+
+        # D-pad: four arms pointing at its centre.
+        cx, cy = 196, 160
+        arms = {"up": [(-12, -36), (12, -36), (12, -14), (0, -4), (-12, -14)],
+                "down": [(-12, 36), (12, 36), (12, 14), (0, 4), (-12, 14)],
+                "left": [(-36, -12), (-36, 12), (-14, 12), (-4, 0), (-14, -12)],
+                "right": [(36, -12), (36, 12), (14, 12), (4, 0), (14, -12)]}
+        c.create_oval(cx - 46, cy - 46, cx + 46, cy + 46, fill="#181818", outline="")
+        for name, points in arms.items():
+            arm = c.create_polygon([v for x, y in points for v in (cx + x, cy + y)], width=2)
+            self.light(name, arm, {"fill": "#2a2a2a", "outline": "#363636"}, {"fill": ACCENT, "outline": ACCENT_HOT})
+
+        # Face buttons with their symbols.
+        cx, cy, d, r = W - 196, 160, 34, 16
+        c.create_oval(cx - 56, cy - 56, cx + 56, cy + 56, fill="#181818", outline="")
+        for name, (dx, dy) in (("triangle", (0, -d)), ("circle", (d, 0)), ("cross", (0, d)), ("square", (-d, 0))):
+            x, y, color = cx + dx, cy + dy, self.FACE[name]
+            base = c.create_oval(x - r, y - r, x + r, y + r, width=2)
+            self.light(name, base, {"fill": "#252525", "outline": "#363636"}, {"fill": color, "outline": color})
+            if name == "triangle":
+                marks = [c.create_polygon(x, y - 8, x + 8, y + 6, x - 8, y + 6, fill="", width=2)]
+                key = "outline"
+            elif name == "circle":
+                marks = [c.create_oval(x - 7, y - 7, x + 7, y + 7, width=2)]
+                key = "outline"
+            elif name == "square":
+                marks = [c.create_rectangle(x - 7, y - 7, x + 7, y + 7, width=2)]
+                key = "outline"
+            else:
+                marks = [c.create_line(x - 7, y - 7, x + 7, y + 7, width=2, capstyle="round"),
+                         c.create_line(x + 7, y - 7, x - 7, y + 7, width=2, capstyle="round")]
+                key = "fill"
+            for mark in marks:
+                self.light(name, mark, {key: color}, {key: BG})
+
+        # Touchpad (two halves, as the game sees its clicks), light bar, Share, Options, PS.
+        rounded(c, 290, 96, 430, 176, 14, fill="#202020", outline="#333333", width=2)
+        self.light_bar = rounded(c, 314, 89, 406, 93, 2, fill="#2a2a2a", outline="")
+        for name, x0, x1 in (("touchpad_left", 296, 359), ("touchpad_right", 361, 424)):
+            half = c.create_rectangle(x0, 102, x1, 170, width=0)
+            self.light(name, half, {"fill": ""}, {"fill": self.LIT_DIM})
+        c.create_line(360, 104, 360, 168, fill="#2c2c2c", dash=(2, 3))
+        c.create_text(360, 136, text="TOUCHPAD", font=tiny, fill="#4a4a4a")
+        for name, x, text in (("share", 266, "SHARE"), ("options", W - 266, "OPTIONS")):
+            pill = rounded(c, x - 5, 98, x + 5, 120, 5, width=1)
+            self.light(name, pill, {"fill": "#2a2a2a", "outline": "#3a3a3a"}, {"fill": ACCENT, "outline": ACCENT_HOT})
+            c.create_text(x, 130, text=text, font=tiny, fill="#5a5a5a")
+        ps = c.create_oval(349, 225, 371, 247, width=2)
+        self.light("ps", ps, {"fill": "#222222", "outline": "#363636"}, {"fill": ACCENT, "outline": ACCENT_HOT})
+        label = c.create_text(360, 236, text="PS", font=tiny)
+        self.light("ps", label, {"fill": "#6a6a6a"}, {"fill": BG})
+
+        # Sticks: a well, a ring for the walk key's reach, the cap and its dot.
+        for side, x in (("l", 282), ("r", W - 282)):
+            y = 228
+            c.create_oval(x - 32, y - 32, x + 32, y + 32, fill="#111111", outline="#2e2e2e", width=2)
+            ring = c.create_oval(x, y, x, y, outline=ACCENT, dash=(3, 3), state="hidden")
+            cap = c.create_oval(x - 20, y - 20, x + 20, y + 20, width=2)
+            self.light(side + "3", cap, {"fill": "#2b2b2b", "outline": "#3c3c3c"},
+                       {"fill": self.LIT_DIM, "outline": ACCENT_HOT})
+            dot = c.create_oval(x - 3, y - 3, x + 3, y + 3, fill=MUTED, outline="")
+            self.sticks[side] = (x, y, ring, cap, dot)
+
+    def set_lit(self, name, on):
+        if self.lit.get(name) == on:
+            return
+        self.lit[name] = on
+        for item, idle, lit in self.lights.get(name, ()):
+            self.canvas.itemconfigure(item, **(lit if on else idle))
+
+    def shake(self, seconds):
+        self.shake_until = max(self.shake_until, time.monotonic() + seconds)
+
+    def show(self, pressed, sticks, triggers, walk=None, connected=False):
+        """pressed: lit names; sticks: {"l"/"r": (x, y)} in -1..1; triggers: {"l2"/"r2": 0..1};
+        walk: the left stick's reach while the walk key holds it back (0..1), or None."""
+        c = self.canvas
+        shaking = time.monotonic() < self.shake_until
+        offset = [random.randint(-3, 3), random.randint(-2, 2)] if shaking else [0, 0]
+        if offset != self.offset:
+            c.move("all", offset[0] - self.offset[0], offset[1] - self.offset[1])
+            self.offset = offset
+        ox, oy = offset
+        for name in self.lights:
+            if name not in self.triggers:
+                self.set_lit(name, name in pressed)
+        for name, (bar, x0, x1) in self.triggers.items():
+            value = triggers.get(name, 0.0)
+            c.coords(bar, x0 + ox, 22 + oy, x0 + ox + (x1 - x0) * value, 42 + oy)
+            c.itemconfigure(bar, state="normal" if value > 0.01 else "hidden")
+            self.set_lit(name, value > 0.5)
+        for side, (x, y, ring, cap, dot) in self.sticks.items():
+            sx, sy = sticks.get(side, (0.0, 0.0))
+            px, py = x + ox + sx * self.STICK_TRAVEL, y + oy + sy * self.STICK_TRAVEL
+            c.coords(cap, px - 20, py - 20, px + 20, py + 20)
+            c.coords(dot, px - 3, py - 3, px + 3, py + 3)
+            c.itemconfigure(dot, fill=ACCENT if sx * sx + sy * sy > 0.04 else MUTED)
+            if side == "l" and walk is not None:
+                reach = self.STICK_TRAVEL * walk + 20
+                c.coords(ring, x + ox - reach, y + oy - reach, x + ox + reach, y + oy + reach)
+                c.itemconfigure(ring, state="normal")
+            else:
+                c.itemconfigure(ring, state="hidden")
+        c.itemconfigure(self.light_bar, fill="#4b7bec" if connected else "#2a2a2a")
+
+
 class Launcher(tk.Tk):
     WIDTH, HEIGHT = 1180, 660
 
@@ -1920,8 +2210,176 @@ class Launcher(tk.Tk):
         window.geometry(f"780x640+{self.winfo_rootx() + 40}+{self.winfo_rooty() + 20}")
         tabs = ttk.Notebook(window)
         tabs.pack(fill="both", expand=True, padx=14, pady=14)
+        self.pad_tab(window, tabs)
         self.keys_tab(window, tabs)
         self.mouse_tab(tabs)
+
+    def pad_tab(self, window, tabs):
+        """A drawn controller that follows the controller (SDL3, while the tab is shown) and the bound keys
+        and mouse buttons, and the controller's vibration (vibration in tlou.ini, runtime_pad.c)."""
+        outer = tk.Frame(tabs, bg=PANEL)
+        tabs.add(outer, text=self.debug_text("Controle"))
+        tk.Label(outer, text=self.debug_text("Mexa no controle ou aperte as teclas e os botões do mouse configurados: "
+                                             "o desenho mostra cada comando."),
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", padx=10, pady=(8, 2))
+        view = PadView(outer)
+        view.canvas.pack(padx=10, pady=(6, 0))
+        status = tk.Label(outer, bg=PANEL, fg=MUTED, font=("Segoe UI", 9))
+        status.pack(pady=(2, 0))
+
+        card = tk.Frame(outer, bg=BG, highlightthickness=1, highlightbackground="#262626")
+        card.pack(fill="x", padx=10, pady=(16, 0))
+        tk.Label(card, text=self.debug_text("Vibração").upper(), bg=BG, fg=ACCENT,
+                 font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=14, pady=(10, 2))
+        row = tk.Frame(card, bg=BG)
+        row.pack(anchor="w", fill="x", padx=12, pady=(0, 12))
+        vibration = tk.BooleanVar(value=read_ini().get("vibration", "1") != "0")
+        state = {"reader": None, "held": set(), "flash": {}, "lookup": {}, "walk_toggle": False, "walk_speed": 0.5,
+                 "walking": False, "walk_was": False, "job": None}
+
+        def test():
+            view.shake(0.6)
+            if state["reader"]:
+                state["reader"].rumble(0.6)
+
+        def save():
+            write_ini({"vibration": int(vibration.get())})
+            tester.config(state="normal" if vibration.get() else "disabled")
+
+        tk.Checkbutton(row, text=self.debug_text("Vibração do controle"), variable=vibration, command=save, bg=BG,
+                       fg=TEXT, selectcolor=PANEL, activebackground=BG, activeforeground=TEXT, font=("Segoe UI", 10),
+                       bd=0, highlightthickness=0, takefocus=0).pack(side="left")
+        tester = tk.Button(row, text=self.debug_text("Testar vibração"), command=test, bg=PANEL, fg=TEXT, bd=0,
+                           cursor="hand2", activebackground="#222", activeforeground=ACCENT, font=("Segoe UI", 9),
+                           padx=12, pady=3, takefocus=0, disabledforeground="#555")
+        tester.pack(side="left", padx=(14, 0))
+        tk.Label(row, text=self.debug_text("Vale na próxima vez que o jogo abrir."), bg=BG, fg=MUTED,
+                 font=("Segoe UI", 9)).pack(side="left", padx=(14, 0))
+        tester.config(state="normal" if vibration.get() else "disabled")
+
+        def shown():
+            return outer.winfo_exists() and tabs.select() == str(outer)
+
+        def source_key(kind, name):
+            return kind, name.lower()
+
+        def load_bindings():
+            ini = read_ini()
+            state["lookup"] = {source_key(*source): action for action, sources in read_controls(ini).items()
+                               for source in sources if source}
+            state["walk_toggle"] = ini.get("walk_toggle", "0") == "1"
+            try:
+                state["walk_speed"] = min(max(float(ini.get("walk_speed", "0.5")), 0.1), 1.0)
+            except ValueError:
+                state["walk_speed"] = 0.5
+
+        def key_press(event):
+            name = key_from_event(event.keysym, event.keycode)
+            if name:
+                state["held"].add(source_key("key", name))
+            return "break"    # no focus moves, no Space on a button, no Alt menu while trying keys
+
+        def key_release(event):
+            name = key_from_event(event.keysym, event.keycode)
+            if name:
+                state["held"].discard(source_key("key", name))
+            return "break"
+
+        def mouse(event, down):
+            name = MOUSE_BUTTONS.get(event.num)
+            if name:
+                (state["held"].add if down else state["held"].discard)(source_key("mouse", name))
+            view.canvas.focus_set()
+
+        def wheel(event):
+            state["flash"][source_key("mouse", "wheel_up" if event.delta > 0 else "wheel_down")] = time.monotonic() + 0.15
+
+        canvas = view.canvas
+        canvas.bind("<KeyPress>", key_press)
+        canvas.bind("<KeyRelease>", key_release)
+        canvas.bind("<ButtonPress>", lambda e: mouse(e, True))
+        canvas.bind("<ButtonRelease>", lambda e: mouse(e, False))
+        canvas.bind("<MouseWheel>", wheel)
+        canvas.bind("<FocusOut>", lambda _: state["held"].clear())
+
+        def axis(actions, negative, positive):
+            return (positive in actions) - (negative in actions)
+
+        def tick():
+            state["job"] = None
+            if not shown():
+                return
+            now = time.monotonic()
+            state["flash"] = {s: until for s, until in state["flash"].items() if until > now}
+            actions = {state["lookup"][s] for s in state["held"] | set(state["flash"]) if s in state["lookup"]}
+            pad = state["reader"].state() if state["reader"] else None
+            pressed, (lx, ly, rx, ry), (l2, r2) = (pad[1], pad[2], pad[3]) if pad else (set(), (0, 0, 0, 0), (0, 0))
+            pressed = set(pressed) | (actions & {"cross", "circle", "square", "triangle", "l1", "r1", "l3", "r3",
+                                                 "options", "touchpad_left", "touchpad_right", "up", "down", "left",
+                                                 "right"})
+            if "touchpad" in pressed:
+                pressed |= {"touchpad_left", "touchpad_right"}
+            if "share" in pressed:      # Back/View/Share: the right side of the touchpad (runtime_pad.c)
+                pressed.add("touchpad_right")
+            l2, r2 = max(l2, 1.0 if "l2" in actions else 0.0), max(r2, 1.0 if "r2" in actions else 0.0)
+            lx, ly = lx + axis(actions, "ls_left", "ls_right"), ly + axis(actions, "ls_up", "ls_down")
+            rx, ry = rx + axis(actions, "rs_left", "rs_right"), ry + axis(actions, "rs_up", "rs_down")
+            walk_held = "walk" in actions
+            if state["walk_toggle"]:
+                if walk_held and not state["walk_was"]:
+                    state["walking"] = not state["walking"]
+            else:
+                state["walking"] = walk_held
+            state["walk_was"] = walk_held
+            sticks = {}
+            for side, x, y, limit in (("l", lx, ly, state["walk_speed"] if state["walking"] else 1.0), ("r", rx, ry, 1.0)):
+                length = (x * x + y * y) ** 0.5
+                scale = limit / length if length > limit else 1.0
+                sticks[side] = (x * scale, y * scale)
+            if "shake" in actions or "shake" in pressed:
+                view.shake(0.1)
+            view.show(pressed, sticks, {"l2": l2, "r2": r2}, state["walk_speed"] if state["walking"] else None,
+                      connected=bool(pad))
+            if state["reader"] is None or not state["reader"].ready:
+                text = self.debug_text("Leitura do controle indisponível (SDL3.dll não encontrado).")
+            elif pad:
+                text = self.debug_text("Controle conectado: {}").format(pad[0] or "?")
+            else:
+                text = self.debug_text("Nenhum controle conectado.")
+            if status.cget("text") != text:
+                status.config(text=text)
+            state["job"] = outer.after(16, tick)
+
+        def stop():
+            if state["job"]:
+                outer.after_cancel(state["job"])
+                state["job"] = None
+            if state["reader"]:
+                state["reader"].close()
+                state["reader"] = None
+            state["held"].clear()
+
+        def changed(_=None):
+            if shown():
+                load_bindings()
+                if state["reader"] is None:
+                    state["reader"] = PadReader()
+                canvas.after_idle(canvas.focus_set)
+                if state["job"] is None:
+                    tick()
+            else:
+                stop()
+
+        tabs.bind("<<NotebookTabChanged>>", changed, add="+")
+        outer.after_idle(changed)
+        outer.bind("<Destroy>", lambda e: stop() if e.widget is outer else None)
+
+        def reset():
+            vibration.set(True)
+            save()
+
+        self.reset_link(outer, reset)
+        window.pad_view, window.pad_state = view, state   # (tests)
 
     def keys_tab(self, window, tabs):
         """Two keys or mouse buttons per action: click a box, then press it (Esc cancels, Delete clears)."""
