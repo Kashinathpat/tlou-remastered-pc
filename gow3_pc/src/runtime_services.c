@@ -1,6 +1,7 @@
 /* System services for an offline, single-user console:
  *   - one local user (id 1) who is logged in but not signed in to PSN;
- *   - network cable unplugged: NetCtl disconnected, sockets unavailable;
+ *   - network cable unplugged: NetCtl disconnected, sockets unavailable
+ *     (GOW3_NP_SIGNED_IN=1 pretends a connection and a PSN sign-in, still with no transfers);
  *   - common dialogs complete immediately (no UI is drawn yet);
  *   - the whole package is installed (PlayGo reports every chunk local).
  * Every entry here is an explicit contract; unknown functions still stop. */
@@ -176,13 +177,59 @@ static ABI const char *net_ntop(int af,const void *src,char *dst,uint32_t size) 
     if (af!=2) { net_errno=47; return NULL; }
     return inet_ntop(AF_INET,src,dst,size);
 }
-static ABI int32_t netctl_state(int32_t *state) { if (!state) return NET_CTL_INVALID_ADDR; *state=0; return 0; }
-static ABI int32_t netctl_info(int code,void *info) { (void)code; (void)info; return NET_CTL_NOT_CONNECTED; }
-static ABI int32_t netctl_register(void *cb,void *arg,int32_t *cid) { (void)cb; (void)arg; if (!cid) return NET_CTL_INVALID_ADDR; *cid=new_id(); return 0; }
-static ABI int32_t netctl_check(void) { return 0; }
-static ABI int32_t netctl_unregister(int cid) { (void)cid; return 0; }
+/* GOW3_NP_SIGNED_IN=1 (multiplayer research, off by default): the user is signed in to a PSN
+ * that exists nowhere. NetCtl reports a connected cable with the address GOW3_NET_IP (default
+ * 10.0.0.2) and NP reports a signed-in account named GOW3_NP_ONLINE_ID (default the user name),
+ * so the game's online menus run as far as they can. No socket or HTTP transfer is made: they
+ * still fail as unplugged, so nothing reaches Sony's or Naughty Dog's servers. */
+static int np_signed_in_mode=-1; /* -1: read GOW3_NP_SIGNED_IN on first use */
+static int np_signed_in(void) {
+    if (np_signed_in_mode<0) { const char *e=getenv("GOW3_NP_SIGNED_IN"); np_signed_in_mode=e && e[0]=='1'; }
+    return np_signed_in_mode;
+}
+static const char *net_ip(void) { const char *e=getenv("GOW3_NET_IP"); return e && *e ? e : "10.0.0.2"; }
+typedef void (ABI *NetCtlCallback)(int32_t,void *);
+static NetCtlCallback netctl_cb;
+static void *netctl_cb_arg;
+static int netctl_cb_pending;
+static ABI int32_t netctl_state(int32_t *state) {
+    if (!state) return NET_CTL_INVALID_ADDR;
+    *state=np_signed_in() ? 3 : 0; /* IPOBTAINED / DISCONNECTED */
+    return 0;
+}
+/* SceNetCtlInfo is a union: each code writes its own member. */
+static ABI int32_t netctl_info(int code,void *info) {
+    if (!np_signed_in()) return NET_CTL_NOT_CONNECTED;
+    if (!info) return NET_CTL_INVALID_ADDR;
+    uint32_t value=0;
+    char text[16]={0};
+    switch (code) {
+    case 2: { static const unsigned char mac[6]={0x02,0x00,0x00,0x00,0x00,0x02}; memcpy(info,mac,6); return 0; }
+    case 3: value=1500; break;                                     /* MTU */
+    case 4: value=1; break;                                        /* link up */
+    case 14: snprintf(text,sizeof(text),"%s",net_ip()); memcpy(info,text,16); return 0;
+    case 15: snprintf(text,sizeof(text),"255.255.255.0"); memcpy(info,text,16); return 0;
+    case 16: case 17: case 18: snprintf(text,sizeof(text),"10.0.0.1"); memcpy(info,text,16); return 0;
+    default: memset(info,0,16); return 0;                          /* wired, DHCP, no proxy, ... */
+    }
+    memcpy(info,&value,4);
+    return 0;
+}
+static ABI int32_t netctl_register(NetCtlCallback cb,void *arg,int32_t *cid) {
+    if (!cid) return NET_CTL_INVALID_ADDR;
+    *cid=new_id();
+    netctl_cb=cb; netctl_cb_arg=arg; netctl_cb_pending=np_signed_in();
+    return 0;
+}
+static ABI int32_t netctl_check(void) {
+    if (netctl_cb_pending && netctl_cb) { netctl_cb_pending=0; netctl_cb(3,netctl_cb_arg); } /* IPOBTAINED */
+    return 0;
+}
+static ABI int32_t netctl_unregister(int cid) { (void)cid; netctl_cb=NULL; return 0; }
 static ABI int32_t netctl_nat(uint32_t *info) {
     if (!info) return NET_CTL_INVALID_ADDR;
+    /* SceNetCtlNatInfo: size, stunStatus (0 unchecked, 1 failed, 2 ok), natType (1-3), mapped address */
+    if (np_signed_in()) { info[1]=2; info[2]=2; inet_pton(AF_INET,net_ip(),&info[3]); return 0; } /* STUN ok, NAT type 2 */
     info[1]=0; info[2]=3; info[3]=0; /* stun failed, NAT type 3, no mapped address */
     return 0;
 }
@@ -205,14 +252,201 @@ static ABI int32_t http_wait(void *handle,void *events,int32_t max,int64_t timeo
 #endif
     return 0; /* no events: nothing is in flight */
 }
+/* sceHttpUriParse(SceHttpUriElement *out, const char *uri, void *pool, size_t *require, size_t
+ * prepare): splits a URI, no network involved. Without a pool it only reports the pool size it
+ * needs; with one, the parts are copied there. SceHttpUriElement: int32 opaque, then char *scheme
+ * @8, username @16, password @24, hostname @32, path @40, query @48, fragment @56, uint16 port @64.
+ * Missing parts are empty strings. */
+#define HTTP_INVALID_VALUE ((int32_t)0x80431077)
+#define HTTP_OUT_OF_MEMORY ((int32_t)0x80431022)
+static ABI int32_t http_uri_parse(unsigned char *out,const char *uri,char *pool,uint64_t *require,uint64_t prepare) {
+    if (!uri) return HTTP_INVALID_VALUE;
+    const char *part[7][2]={{0}}; /* scheme, user, password, host, path, query, fragment: begin/end */
+    const char *p=uri, *end=uri+strlen(uri);
+    const char *colon=strstr(p,"://");
+    int opaque=0;
+    if (colon) { part[0][0]=p; part[0][1]=colon; p=colon+3; }
+    else { const char *c=strchr(p,':'); if (c && c<end) { part[0][0]=p; part[0][1]=c; p=c+1; opaque=1; } }
+    uint16_t port=0;
+    if (!opaque && colon) {
+        const char *authority_end=p+strcspn(p,"/?#");
+        const char *at=memchr(p,'@',(size_t)(authority_end-p));
+        if (at) {
+            const char *c=memchr(p,':',(size_t)(at-p));
+            part[1][0]=p; part[1][1]=c ? c : at;
+            if (c) { part[2][0]=c+1; part[2][1]=at; }
+            p=at+1;
+        }
+        const char *c=memchr(p,':',(size_t)(authority_end-p));
+        part[3][0]=p; part[3][1]=c ? c : authority_end;
+        if (c) port=(uint16_t)atoi(c+1);
+        p=authority_end;
+    }
+    const char *q=p+strcspn(p,"?#");
+    part[4][0]=p; part[4][1]=q;
+    if (*q=='?') { const char *h=q+strcspn(q,"#"); part[5][0]=q; part[5][1]=h; q=h; }
+    if (*q=='#') { part[6][0]=q; part[6][1]=end; }
+    if (!port && part[0][0]) {
+        size_t n=(size_t)(part[0][1]-part[0][0]);
+        port=n==5 && !strncmp(part[0][0],"https",5) ? 443 : n==4 && !strncmp(part[0][0],"http",4) ? 80 : 0;
+    }
+    uint64_t need=0;
+    for (int i=0;i<7;++i) need+=(uint64_t)(part[i][1]-part[i][0])+1;
+    if (require) *require=need;
+    if (!pool) return out || require ? 0 : HTTP_INVALID_VALUE;
+    if (prepare<need) return HTTP_OUT_OF_MEMORY;
+    if (!out) return HTTP_INVALID_VALUE;
+    memset(out,0,80);
+    int32_t opaque_flag=opaque; memcpy(out,&opaque_flag,4);
+    char *w=pool;
+    for (int i=0;i<7;++i) {
+        size_t n=(size_t)(part[i][1]-part[i][0]);
+        if (n) memcpy(w,part[i][0],n);
+        w[n]=0;
+        memcpy(out+8+8*i,&w,8);
+        w+=n+1;
+    }
+    memcpy(out+64,&port,2);
+    return 0;
+}
+/* sceHttpUriBuild(char *out, size_t *require, size_t prepare, const SceHttpUriElement *element,
+ * uint32_t option): the reverse of UriParse. Option bits: scheme 1, hostname 2, port 4, path 8,
+ * username 16, password 32, query 64, fragment 128. A port that is the scheme's default is left
+ * out. */
+static ABI int32_t http_uri_build(char *out,uint64_t *require,uint64_t prepare,const unsigned char *element,uint32_t option) {
+    if (!element) return HTTP_INVALID_VALUE;
+    const char *part[7];
+    for (int i=0;i<7;++i) { memcpy(&part[i],element+8+8*i,8); if (!part[i]) part[i]=""; }
+    uint16_t port; memcpy(&port,element+64,2);
+    int32_t opaque; memcpy(&opaque,element,4);
+    char text[4096]; size_t n=0;
+#define URI_ADD(s) do { size_t l_=strlen(s); if (n+l_>=sizeof(text)) return HTTP_OUT_OF_MEMORY; memcpy(text+n,s,l_); n+=l_; } while (0)
+    if ((option&1) && *part[0]) { URI_ADD(part[0]); URI_ADD(opaque ? ":" : "://"); }
+    if ((option&16) && *part[1]) {
+        URI_ADD(part[1]);
+        if ((option&32) && *part[2]) { URI_ADD(":"); URI_ADD(part[2]); }
+        URI_ADD("@");
+    }
+    if (option&2) URI_ADD(part[3]);
+    if ((option&4) && port) {
+        int default_port=(!strcmp(part[0],"http") && port==80) || (!strcmp(part[0],"https") && port==443);
+        if (!default_port) { char p[8]; snprintf(p,sizeof(p),":%u",(unsigned)port); URI_ADD(p); }
+    }
+    if (option&8) URI_ADD(part[4]);
+    if (option&64) URI_ADD(part[5]);
+    if (option&128) URI_ADD(part[6]);
+#undef URI_ADD
+    text[n]=0;
+    if (require) *require=n+1;
+    if (!out) return require ? 0 : HTTP_INVALID_VALUE;
+    if (prepare<n+1) return HTTP_OUT_OF_MEMORY;
+    memcpy(out,text,n+1);
+    return 0;
+}
 
 /* ---- NP (PSN): signed out ---- */
 static ABI int32_t np_state(int32_t user,int32_t *state) {
     if (!state) return NP_INVALID_ARGUMENT;
-    (void)user; *state=1; /* SIGNED_OUT */
+    (void)user; *state=np_signed_in() ? 2 : 1; /* SIGNED_IN / SIGNED_OUT */
     return 0;
 }
 static ABI int32_t np_signed_out(void) { return NP_SIGNED_OUT; }
+/* Signed-in account (GOW3_NP_SIGNED_IN=1). SceNpOnlineId: char data[16], term, dummy[3];
+ * SceNpId: SceNpOnlineId, opt[8], reserved[8]. */
+static void np_online_id(unsigned char out[20]) {
+    const char *name=getenv("GOW3_NP_ONLINE_ID");
+    if (!name || !*name) name=getenv("GOW3_USER_NAME");
+    if (!name || !*name) name="Hunter";
+    memset(out,0,20);
+    memcpy(out,name,strnlen(name,16));
+}
+static uint64_t np_account_id(void) {
+    unsigned char id[20]; np_online_id(id);
+    uint64_t h=UINT64_C(1469598103934665603);
+    for (int i=0;i<16;++i) h=(h^id[i])*UINT64_C(1099511628211);
+    return h|1;
+}
+static ABI int32_t np_get_online_id(int32_t user,unsigned char *id) {
+    (void)user;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (!id) return NP_INVALID_ARGUMENT;
+    np_online_id(id); return 0;
+}
+static ABI int32_t np_get_np_id(int32_t user,unsigned char *id) {
+    (void)user;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (!id) return NP_INVALID_ARGUMENT;
+    memset(id,0,36); np_online_id(id); return 0;
+}
+static ABI int32_t np_get_account_id(int32_t user,uint64_t *id) {
+    (void)user;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (!id) return NP_INVALID_ARGUMENT;
+    *id=np_account_id(); return 0;
+}
+static ABI int32_t np_get_country(int32_t user,char *country) {
+    (void)user;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (!country) return NP_INVALID_ARGUMENT;
+    memset(country,0,4); country[0]='u'; country[1]='s'; return 0;
+}
+/* Requests answered at once: the account may play online, has PS Plus, no restrictions. */
+static ABI int32_t np_availability(int32_t req,const void *id,void *result) {
+    (void)req; (void)id; (void)result;
+    return np_signed_in() ? 0 : NP_SIGNED_OUT;
+}
+static ABI int32_t np_parental(int32_t req,const void *id,int8_t *age,unsigned char *info) {
+    (void)req; (void)id;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (age) *age=30;
+    if (info) memset(info,0,3);
+    return 0;
+}
+static ABI int32_t np_check_plus(int32_t req,const void *param,unsigned char *result) {
+    (void)req; (void)param;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (result) { memset(result,0,8); result[0]=1; } /* authorized */
+    return 0;
+}
+/* sceNpAuthGetAuthorizationCode(req, const param *, SceNpAuthorizationCode *code, int *issuer):
+ * param = {size, const SceNpOnlineId *, const SceNpClientId *, const char *scope}. A game hands the
+ * code to its own server, which redeems it with PSN; here the code is a placeholder that only a
+ * private server of this port would accept. SceNpAuthorizationCode: char code[129], padding[7]. */
+static ABI int32_t np_auth_code(int32_t req,const unsigned char *param,char *code,int32_t *issuer) {
+    (void)req;
+    if (!np_signed_in()) return NP_SIGNED_OUT;
+    if (!code) return NP_INVALID_ARGUMENT;
+    if (param) {
+        const char *scope; const unsigned char *client;
+        memcpy(&client,param+16,8); memcpy(&scope,param+24,8);
+        printf("Runtime: NP authorization code requested (client id %.24s, scope %.80s)\n",
+               client ? (const char *)client : "-",scope ? scope : "-");
+    }
+    unsigned char id[20]; np_online_id(id);
+    memset(code,0,136);
+    snprintf(code,129,"PCPORT-%s-%016llx",(const char *)id,(unsigned long long)np_account_id());
+    if (issuer) *issuer=256; /* NP (production) */
+    return 0;
+}
+/* sceNpRegisterStateCallback: void cb(userId, state, const SceNpId *, void *arg); called once
+ * from sceNpCheckCallback with the signed-in state. */
+typedef void (ABI *NpStateCallback)(int32_t,int32_t,const void *,void *);
+static NpStateCallback np_state_cb;
+static void *np_state_arg;
+static int np_state_pending;
+static ABI int32_t np_register_state(NpStateCallback cb,void *arg) {
+    np_state_cb=cb; np_state_arg=arg; np_state_pending=np_signed_in();
+    return new_id();
+}
+static ABI int32_t np_check_callback(void) {
+    if (np_state_pending && np_state_cb) {
+        static unsigned char id[36];
+        memset(id,0,sizeof(id)); np_online_id(id);
+        np_state_pending=0;
+        np_state_cb(USER_ID,2,id,np_state_arg);
+    }
+    return 0;
+}
 /* TUS has no contexts/requests while the local user is signed out of PSN. */
 static ABI int32_t np_tus_no_login(void) { return (int32_t)0x80550705; }
 static ABI int32_t np_tus_invalid_id(void) { return (int32_t)0x8055070e; }
@@ -220,7 +454,7 @@ static ABI int32_t np_register(void *cb,void *arg) { (void)cb; (void)arg; return
 static ABI void np_register_void(void *cb,void *arg) { (void)cb; (void)arg; }
 static ABI int32_t np_request(const void *param) { (void)param; return new_id(); }
 static ABI int32_t np_request_ctx(int32_t ctx,const void *param) { (void)ctx; (void)param; return new_id(); }
-static ABI int32_t np_poll(int32_t request,int32_t *result) { (void)request; if (result) *result=NP_SIGNED_OUT; return 0; }
+static ABI int32_t np_poll(int32_t request,int32_t *result) { (void)request; if (result) *result=np_signed_in() ? 0 : NP_SIGNED_OUT; return 0; }
 static ABI int32_t np_compare(const void *a,const void *b) {
     if (!a || !b) return NP_INVALID_ARGUMENT;
     return memcmp(a,b,16) ? (int32_t)0x80550609 : 0; /* NP_UTIL NOT_MATCH */
@@ -780,14 +1014,14 @@ static const RuntimeExport exports[]={
     {"sceHttpSetEpoll",ok_void}, {"sceHttpUnsetEpoll",ok_void}, {"sceHttpWaitRequest",http_wait},
     {"sceHttpGetStatusCode",http_fail}, {"sceHttpGetResponseContentLength",http_fail},
     {"sceHttpReadData",http_fail},
-    {"sceNpGetState",np_state}, {"sceNpGetOnlineId",np_signed_out}, {"sceNpGetNpId",np_signed_out},
-    {"sceNpRegisterStateCallback",np_register}, {"sceNpUnregisterStateCallback",ok_void},
+    {"sceNpGetState",np_state}, {"sceNpGetOnlineId",np_get_online_id}, {"sceNpGetNpId",np_get_np_id},
+    {"sceNpRegisterStateCallback",np_register_state}, {"sceNpUnregisterStateCallback",ok_void},
     {"sceNpRegisterGamePresenceCallback",np_register_void}, {"sceNpRegisterPlusEventCallback",np_register},
-    {"sceNpUnregisterPlusEventCallback",ok_void}, {"sceNpCheckCallback",ok_void},
+    {"sceNpUnregisterPlusEventCallback",ok_void}, {"sceNpCheckCallback",np_check_callback},
     {"sceNpSetNpTitleId",ok_void}, {"sceNpNotifyPlusFeature",ok_void}, {"sceNpSetContentRestriction",ok_void},
     {"sceNpCreateAsyncRequest",np_request}, {"sceNpDeleteRequest",ok_void}, {"sceNpAbortRequest",ok_void},
-    {"sceNpPollAsync",np_poll}, {"sceNpCheckNpAvailability",np_signed_out},
-    {"sceNpGetParentalControlInfo",np_signed_out}, {"sceNpCheckPlus",np_signed_out},
+    {"sceNpPollAsync",np_poll}, {"sceNpCheckNpAvailability",np_availability},
+    {"sceNpGetParentalControlInfo",np_parental}, {"sceNpCheckPlus",np_check_plus},
     {"sceNpGetGamePresenceStatus",np_signed_out},
     {"sceNpTusCreateNpTitleCtx",np_tus_no_login}, {"sceNpTusCreateRequest",np_tus_invalid_id},
     {"sceNpTusDeleteNpTitleCtx",np_tus_invalid_id}, {"sceNpTusDeleteRequest",np_tus_invalid_id},
@@ -795,7 +1029,7 @@ static const RuntimeExport exports[]={
     {"sceNpTusGetFriendsDataStatusAsync",np_tus_invalid_id}, {"sceNpTusSetDataAsync",np_tus_invalid_id},
     {"sceNpCmpNpId",np_compare}, {"sceNpCmpOnlineId",np_compare},
     {"sceNpAuthCreateAsyncRequest",np_request}, {"sceNpAuthDeleteRequest",ok_void},
-    {"sceNpAuthPollAsync",np_poll}, {"sceNpAuthGetAuthorizationCode",np_signed_out},
+    {"sceNpAuthPollAsync",np_poll}, {"sceNpAuthGetAuthorizationCode",np_auth_code},
     {"sceNpLookupCreateTitleCtx",np_request}, {"sceNpLookupDeleteTitleCtx",ok_void},
     {"sceNpLookupCreateAsyncRequest",np_request_ctx}, {"sceNpLookupDeleteRequest",ok_void},
     {"sceNpLookupAbortRequest",ok_void}, {"sceNpLookupPollAsync",np_poll}, {"sceNpLookupNpId",np_signed_out},
@@ -879,10 +1113,10 @@ static const RuntimeExport exports[]={
     {"sceNetGetpeername",net_unreachable}, {"sceNetHtonll",net_htonll}, {"sceNetNtohll",net_htonll},
     {"sceNetCtlInit",ok_void},
     {"sceHttpGetAllResponseHeaders",http_fail}, {"sceHttpParseResponseHeader",http_fail},
-    {"sceHttpUriBuild",http_fail}, {"sceHttpUriParse",http_fail},
+    {"sceHttpUriBuild",http_uri_build}, {"sceHttpUriParse",http_uri_parse},
     {"sceHttpRemoveRequestHeader",ok_void}, {"sceHttpsSetSslCallback",ok_void},
-    {"sceNpCreateRequest",np_request}, {"sceNpGetAccountCountry",np_signed_out},
-    {"sceNpGetAccountIdA",np_signed_out},
+    {"sceNpCreateRequest",np_request}, {"sceNpGetAccountCountry",np_get_country},
+    {"sceNpGetAccountIdA",np_get_account_id},
     {"sceNpInGameMessageInitialize",lib_init_id}, {"sceNpInGameMessageCreateHandle",np_request_ctx},
     {"sceNpInGameMessagePrepare",np_signed_out}, {"sceNpInGameMessageSendData",np_signed_out},
     {"sceNpInGameMessageAbortHandle",ok_void}, {"sceNpInGameMessageTerminate",ok_void},

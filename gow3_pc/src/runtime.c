@@ -225,7 +225,7 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     uintptr_t thread = runtime_thread_resolve(name);
     if (thread) return thread;
     uintptr_t content=runtime_content_resolve(name);
-    if (content) return content;
+    if (content) return runtime_nettrace_wrap(name, content);
     uintptr_t timer = runtime_time_resolve(name);
     if (timer) return timer;
     uintptr_t sema = runtime_sema_resolve(name);
@@ -237,7 +237,7 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     uintptr_t kernel = runtime_kernel_resolve(name);
     if (kernel) return kernel;
     uintptr_t services = runtime_services_resolve(name);
-    if (services) return services;
+    if (services) return runtime_nettrace_wrap(name, services);
     uintptr_t ajm = runtime_ajm_resolve(name);
     if (ajm) return ajm;
     uintptr_t videodec = runtime_videodec_resolve(name);

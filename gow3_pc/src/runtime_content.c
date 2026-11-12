@@ -69,12 +69,42 @@ static ABI int32_t param_int(uint32_t id,int32_t *out) {
     printf("Runtime: AppContent parameter %u = %d\n",id,*out);
     return 0;
 }
+/* GOW3_ADDCONT=<label>[,<label>...] (multiplayer research, off by default): these entitlement
+ * labels are reported as add-ons the user owns that carry no data of their own (unlock keys,
+ * status NO_EXTRA_DATA), for content whose files are already in the game's own archives.
+ * SceAppContentAddcontInfo: char label[17], padding[3], uint32 status (24 bytes). */
+#define ADDCONT_MAX 16
+static char addcont_labels[ADDCONT_MAX][17];
+static int addcont_count=-1;
+static void addcont_load(void) {
+    if (addcont_count>=0) return;
+    addcont_count=0;
+    const char *v=getenv("GOW3_ADDCONT");
+    while (v && *v && addcont_count<ADDCONT_MAX) {
+        size_t n=strcspn(v,",");
+        if (n && n<=16) { memcpy(addcont_labels[addcont_count],v,n); addcont_labels[addcont_count][n]=0; ++addcont_count; }
+        v+=n; if (*v==',') ++v;
+    }
+}
 static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint32_t *hits) {
     require_initialized();
+    addcont_load();
     if (service) printf("Runtime: AppContent add-on list for service label %u: none mounted\n", service);
     if ((!capacity || !list) && !hits) return PARAMETER;
-    /* No add-ons are mounted by this provider. Never touch unused list slots. */
-    if (hits) *hits=0;
+    if (service || !addcont_count) {
+        /* No add-ons are mounted by this provider. Never touch unused list slots. */
+        if (hits) *hits=0;
+        ++lists; return 0;
+    }
+    uint32_t n=0;
+    for (int i=0;i<addcont_count && (!list || n<capacity);++i,++n) {
+        if (!list) continue;
+        unsigned char *entry=(unsigned char *)list+24*n;
+        memset(entry,0,24); /* status 0: NO_EXTRA_DATA (an unlock key) */
+        memcpy(entry,addcont_labels[i],strlen(addcont_labels[i]));
+    }
+    if (hits) *hits=n;
+    if (!lists) printf("Runtime: AppContent add-ons (GOW3_ADDCONT): %d unlock keys listed\n",addcont_count);
     ++lists; return 0;
 }
 static ABI int32_t download_space(const char *mount,uint64_t *kb) {
@@ -93,6 +123,7 @@ static ABI int32_t addon_mount(uint32_t service,const void *label,char *mount) {
     require_initialized();
     (void)service;
     if (!label || !mount) return PARAMETER;
+    printf("Runtime: AppContent mount of add-on %.16s: not found\n",(const char *)label);
     return ADDCONT_NOT_FOUND;
 }
 static ABI int32_t addon_download(uint32_t service,const void *label) {

@@ -130,6 +130,47 @@ int main(void) {
     trophy_file(2,trophy_path,sizeof(trophy_path)); remove(trophy_path);
     snprintf(trophy_path,sizeof(trophy_path),"%s/trophy",test_user); rmdir(trophy_path); rmdir(test_user);
 
+    /* PSN: signed out by default; GOW3_NP_SIGNED_IN pretends a sign-in, with no transfers. */
+    int32_t state=-1, polled=-1; unsigned char npid[36]; uint64_t account=0;
+    np_signed_in_mode=0;
+    assert(np_state(1,&state)==0 && state==1 && np_get_np_id(1,npid)==NP_SIGNED_OUT);
+    assert(netctl_state(&state)==0 && state==0 && netctl_info(14,npid)==NET_CTL_NOT_CONNECTED);
+    assert(np_poll(1,&polled)==0 && polled==NP_SIGNED_OUT);
+    np_signed_in_mode=1;
+    assert(np_state(1,&state)==0 && state==2 && netctl_state(&state)==0 && state==3);
+    memset(npid,0xff,sizeof(npid));
+    assert(np_get_np_id(1,npid)==0 && !strcmp((char *)npid,"Hunter") && npid[16]==0 && npid[35]==0);
+    assert(np_get_account_id(1,&account)==0 && account!=0);
+    assert(netctl_info(14,npid)==0 && !strcmp((char *)npid,"10.0.0.2"));
+    assert(np_poll(1,&polled)==0 && polled==0);
+    assert(net_unreachable()==NET_ENETUNREACH && http_fail()==HTTP_NETWORK); /* still no transfers */
+    np_signed_in_mode=0;
+
+    /* URI parsing (no network): size query first, then the parts copied into the pool. */
+    uint64_t need=0; unsigned char element[80]; char uri_pool[256]; char *part;
+    const char *uri="http://t1.campaign.config.s3.amazonaws.com/campaign3.config.txt.crypt";
+    assert(http_uri_parse(element,uri,NULL,&need,0)==0 && need>strlen(uri));
+    assert(http_uri_parse(element,uri,uri_pool,&need,need-1)==HTTP_OUT_OF_MEMORY);
+    assert(http_uri_parse(element,uri,uri_pool,&need,need)==0);
+    memcpy(&part,element+8,8); assert(!strcmp(part,"http"));
+    memcpy(&part,element+32,8); assert(!strcmp(part,"t1.campaign.config.s3.amazonaws.com"));
+    memcpy(&part,element+40,8); assert(!strcmp(part,"/campaign3.config.txt.crypt"));
+    memcpy(&part,element+48,8); assert(!strcmp(part,""));
+    uint16_t port; memcpy(&port,element+64,2); assert(port==80);
+    assert(http_uri_parse(element,"https://user:pw@host:8443/a/b?x=1#f",uri_pool,&need,sizeof(uri_pool))==0);
+    memcpy(&part,element+16,8); assert(!strcmp(part,"user"));
+    memcpy(&part,element+24,8); assert(!strcmp(part,"pw"));
+    memcpy(&part,element+32,8); assert(!strcmp(part,"host"));
+    memcpy(&part,element+48,8); assert(!strcmp(part,"?x=1"));
+    memcpy(&part,element+56,8); assert(!strcmp(part,"#f"));
+    memcpy(&port,element+64,2); assert(port==8443);
+    char built[128]; uint64_t built_need=0;
+    assert(http_uri_build(built,&built_need,sizeof(built),element,0xffff)==0);
+    assert(!strcmp(built,"https://user:pw@host:8443/a/b?x=1#f") && built_need==strlen(built)+1);
+    assert(http_uri_build(built,NULL,4,element,0xffff)==HTTP_OUT_OF_MEMORY);
+    assert(http_uri_parse(element,uri,uri_pool,&need,sizeof(uri_pool))==0);
+    assert(http_uri_build(built,NULL,sizeof(built),element,0xffff)==0 && !strcmp(built,uri)); /* port 80 left out */
+
     float ratio=0; assert(safe_area(&ratio)==0 && ratio==1.0f && safe_area(NULL)==SYSTEM_PARAMETER);
     puts("services test: ok");
     return 0;
