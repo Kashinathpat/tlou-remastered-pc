@@ -14,6 +14,7 @@
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
+#include "shader_recompiler/render_size_literals.h"
 #include "gow3_movie.h"
 
 namespace Shader {
@@ -72,6 +73,10 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
         LOG_WARNING(Render_Recompiler, "First instruction is not s_mov_b32 vcc_hi, #imm");
     }
 
+    // gow3 12 Nov 2026: whether the game wrote its render size into this code (the pipeline cache
+    // records it, render_size_literals.h).
+    info.render_size_literals = RenderSizeLiterals(code);
+
     Gcn::GcnCodeSlice slice(code.data(), code.data() + code.size());
     Gcn::GcnDecodeContext decoder;
 
@@ -116,6 +121,9 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
         }
     }
     Shader::Optimization::ConstantPropagationPass(program.post_order_blocks);
+    // gow3 12 Nov 2026 (The Last of Us, #5/#66): the quarter-size depth the ambient shadows are
+    // upsampled with matches the pixels they were computed at (quarter_depth_pass.cpp).
+    Shader::Optimization::QuarterDepthPass(program);
     if (info.sw_stage == SwStage::TessellationControl) {
         Shader::Optimization::TessellationPreprocess(program, runtime_info);
         Shader::Optimization::HullShaderTransform(program, runtime_info);

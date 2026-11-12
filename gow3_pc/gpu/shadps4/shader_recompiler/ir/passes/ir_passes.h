@@ -43,6 +43,12 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
                              const Profile& profile);
 /// gow3: whether the shader gets LDS barriers for groups of several waves on 32-lane subgroups.
 bool MultiwaveLdsBarriers(u64 pgm_hash);
+/// gow3 12 Nov 2026 (quarter_depth_pass.cpp, The Last of Us #5/#66): Cs_DownsampleQuarterDepth
+/// writes the depth the ambient shadows were computed at instead of the farthest of each block
+/// (GOW3_QUARTER_DEPTH=0: off). QuarterDepthPointSample: whether this shader is changed (its
+/// cached binary has its own name).
+bool QuarterDepthPointSample(u64 pgm_hash);
+void QuarterDepthPass(IR::Program& program);
 /// gow3 11 Nov 2026: workgroup barriers inside an if whose condition differs between threads run
 /// for every thread, the if's LDS writes kept to the threads it selects (shared_memory_barrier_pass
 /// .cpp). On while UniformBarriersOn() (the pipeline cache sets it).

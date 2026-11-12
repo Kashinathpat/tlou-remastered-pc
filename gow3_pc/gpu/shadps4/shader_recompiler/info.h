@@ -159,6 +159,12 @@ struct Info : InfoPersistent {
     /// Set by CollectShaderInfoPass; for a cached shader, read from its meta (a hint for whether
     /// to compile it again: the dispatch takes the split from the binary's LocalSize).
     bool cs_split_eligible{};
+    /// gow3 12 Nov 2026 (render_size_literals.h): the render size (width | height << 16) whose
+    /// literals the game wrote into this shader's code, 0 when it holds none. Set at translation;
+    /// for a cached shader, read from its meta (render_size_record: metas of earlier builds have
+    /// no record).
+    u32 render_size_literals{};
+    bool render_size_record{};
     bool uses_fp16{};
     bool uses_fp64{};
     bool uses_pack_10_11_11{};

@@ -359,6 +359,10 @@ add_executable(async-fetch-snapshot-test EXCLUDE_FROM_ALL ../tests/test_async_fe
     shadps4/shader_recompiler/frontend/decode.cpp
     shadps4/shader_recompiler/frontend/format.cpp)
 target_compile_options(async-fetch-snapshot-test PRIVATE -UNDEBUG)
+add_executable(render-size-literals-test EXCLUDE_FROM_ALL ../tests/test_render_size_literals.cpp
+    shadps4/shader_recompiler/render_size_literals.cpp)
+target_compile_options(render-size-literals-test PRIVATE -UNDEBUG)
+target_include_directories(render-size-literals-test PRIVATE shim shadps4)
 add_executable(workgroup-split-test EXCLUDE_FROM_ALL ../tests/test_workgroup_split.cpp)
 target_compile_options(workgroup-split-test PRIVATE -UNDEBUG)
 target_include_directories(workgroup-split-test PRIVATE shim shadps4 third_party/gcn/include)

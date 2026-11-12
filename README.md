@@ -80,10 +80,20 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     where all 3 lost it before). With these changes an Intel Arc card was reported to run well,
     with no crash in the session played. The shader cache is rebuilt once on such a GPU. Three cloth shaders still have barriers in such ifs, inside loops (`106beafd`,
     `e44070db`, `20c1dc43`); they did not hang it in the replays tried.
-  - Soft shadows can look detached from objects, with a thin light outline around them and little
-    darkening where they touch the ground, most visibly under vehicle wheels. The same spot on a
-    PS4 has the contact darkening this port misses, so it is a port bug; the pass that draws it
-    has not been identified yet.
+  - A thin light or dark outline where the soft shadows of characters and vehicles meet the
+    ground ([#5](https://github.com/ravencaio/tlou-remastered-pc/issues/5),
+    [#66](https://github.com/ravencaio/tlou-remastered-pc/issues/66)). Until 0.2.1 it was much
+    worse at any Resolution but 1920x1080, with the shadows drawn away from the objects and
+    missing under feet and wheels: the game writes its render size into those shaders when it
+    loads them, and the shader cache reused shaders translated at another size (every cache made
+    before the Resolution setting worked was a 1080p one). Such shaders now compile again once
+    after the Resolution changes. The rest is the game's own: it draws those shadows at a quarter
+    of its render size, computing each from the top-left pixel of a 4x4 block but blending them
+    with the depth of the block's farthest pixel, so along an edge the ground took a character's
+    unshadowed value (a light band) and the character's edge the ground's (a dark one), on a PS4
+    too (a PS4 Pro's 3200x1800 makes it thinner). The port now blends with the depth the shadows
+    were computed at (`GOW3_QUARTER_DEPTH=0`: the game's), which keeps the ground's shadow up to
+    the edge; a higher Resolution makes what remains thinner.
 - **Not available for this game yet:** a true mouse camera (the mouse drives the right stick
   instead, though no longer capped at the stick's top speed), the draw distance sliders and
   keyboard button prompts, which need the game's own camera code, settings block and prompt

@@ -42,3 +42,11 @@ Intel UHD 630 findings (11 Nov 2026): float rounding toward zero left out on Int
   copies reapplied (also in Fruc12's PR #83); diagnostics GOW3_FLOAT_CONTROLS, GOW3_VK_DISABLE_EXT
   (after SpartanPort's SPARTAN_VK_DISABLE_EXT), GOW3_CHECKPOINT_FILE; frame captures written as
   RGBA on BGRA swapchains.
+The Last of Us render-size literals (12 Nov 2026, #5/#66, shader_recompiler/render_size_literals.cpp):
+  the game rewrites its shaders' quarter-size grid literals (480, 270, 1/480, 1/270) for its
+  render size, so shader metas carry a "GRSZ" record of the size whose literals the code holds and
+  shaders cached for another size compile again (metas without it: searched in the SPIR-V);
+  GOW3_RENDER_SIZE_CACHE=0 turns the check off.
+  QuarterDepthPass (quarter_depth_pass.cpp): Cs_DownsampleQuarterDepth (cs 42cb16a5) writes the
+  depth of each block's top-left pixel, where the ambient shadows are computed, instead of the
+  farthest of the block (cached binary "_qd"; GOW3_QUARTER_DEPTH=0 off).

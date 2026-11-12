@@ -27,6 +27,7 @@
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/render_size_literals.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -50,15 +51,21 @@ static constexpr u32 DirectMemoryMagic = 0x414d4447u;
 /// gow3 10 Nov 2026: starts the record of whether a compute shader's LDS accesses were
 /// bounds-checked (SharedMemoryBoundsPass), "GLDB".
 static constexpr u32 LdsBoundsMagic = 0x42444c47u;
+/// gow3 12 Nov 2026: starts the record of the render size whose literals the game wrote into a
+/// shader's code ("GRSZ", a u32: width | height << 16, 0 for none; render_size_literals.h).
+static constexpr u32 RenderSizeMagic = 0x5a535247u;
 
 /// gow3: the cache name of a shader's SPIR-V. Shaders that gained multi-wave LDS barriers get a
 /// new name, so binaries cached before the fix are not found and only those shaders recompile.
 static std::string ShaderBinaryName(u64 pgm_hash, size_t perm_idx) {
     // gow3 11 Nov 2026: and shaders compiled with lanes (lane_coarsening.cpp), "_lanes2".
     const u32 lanes = Shader::Optimization::LaneCoarsening(pgm_hash);
-    return fmt::format("{:#018x}_{}{}{}", pgm_hash, perm_idx,
+    // gow3 12 Nov 2026: and The Last of Us' quarter-size depth written at the ambient shadows'
+    // pixels (quarter_depth_pass.cpp), "_qd".
+    return fmt::format("{:#018x}_{}{}{}{}", pgm_hash, perm_idx,
                        Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "",
-                       lanes > 1 ? fmt::format("_lanes{}", lanes) : std::string{});
+                       lanes > 1 ? fmt::format("_lanes{}", lanes) : std::string{},
+                       Shader::Optimization::QuarterDepthPointSample(pgm_hash) ? "_qd" : "");
 }
 } // namespace Serialization
 
@@ -809,6 +816,38 @@ bool BinaryMatchesMeta(const std::vector<u32>& spv, u64 binary_hash, u64 pgm_has
     return matches;
 }
 
+/// gow3 12 Nov 2026 (render_size_literals.h, #5/#66): whether this cached shader was translated
+/// from code the game had written another render size into. Its meta records that size; a meta
+/// of an earlier build has no record and its binary is searched for another size's literals
+/// (every cache before 11 Nov 2026 was translated at 1080p). Such a shader compiles again.
+bool StaleRenderSize(const Shader::Info& info, const std::vector<u32>& spv) {
+    // GOW3_RENDER_SIZE_CACHE=0 (diagnostics): cached shaders load whatever size they were
+    // translated for, as before.
+    static const bool on = [] {
+        const char* env = std::getenv("GOW3_RENDER_SIZE_CACHE");
+        return !(env && env[0] == '0' && env[1] == 0);
+    }();
+    if (!on) {
+        return false;
+    }
+    const u32 size = Shader::GameRenderSize();
+    const bool stale = info.render_size_record
+                           ? info.render_size_literals != 0 && info.render_size_literals != size
+                           : Shader::HoldsOtherRenderSizeLiterals(spv);
+    if (stale) {
+        static std::atomic<u32> count{0};
+        const u32 n = count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1 || n == 100 || n == 1000) {
+            std::printf("Pipeline cache: %u shader(s) cached for another render size than %ux%u "
+                        "compile again (latest: %#llx)\n",
+                        n, size & 0xFFFF, size >> 16,
+                        static_cast<unsigned long long>(info.pgm_hash));
+            std::fflush(stdout);
+        }
+    }
+    return stale;
+}
+
 // gow3 21 Oct 2026 (#92, #95): before the compile-storm fix, two compute shaders
 // (8f067540, 7d7e7206) built a new version for every set of garbage floats in buffer slots
 // they don't use, and the cache kept each one: 1,268 and 383 versions here, 23,845 compute
@@ -901,6 +940,12 @@ void RegisterShaderMeta(const Shader::Info& info,
         tail.Write(Serialization::LdsBoundsMagic);
         tail.Write(static_cast<u8>(Shader::Optimization::SharedMemoryBounds(info.pgm_hash)));
     }
+    // The render size the game wrote into the shader's code (StaleRenderSize), in every stage.
+    {
+        Serialization::Writer tail{ar};
+        tail.Write(Serialization::RenderSizeMagic);
+        tail.Write(info.render_size_literals);
+    }
 
     Storage::DataBase::Instance().Save(Storage::BlobType::ShaderMeta,
                                        fmt::format("{:#018x}", perm_hash), ar.TakeOff());
@@ -954,6 +999,8 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
     // anything else ends them.
     bool has_tail = false, has_dma_record = false;
     u8 eligible = 0, applied = 1, dma_at_compile = 0, lds_bounds = 0;
+    info.render_size_record = false;
+    info.render_size_literals = 0;
     while (ar.Remaining() >= sizeof(u32)) {
         Serialization::Reader tail{ar};
         u32 magic{};
@@ -967,6 +1014,9 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
             has_dma_record = true;
         } else if (magic == Serialization::LdsBoundsMagic && ar.Remaining() >= sizeof(u8)) {
             tail.Read(lds_bounds);
+        } else if (magic == Serialization::RenderSizeMagic && ar.Remaining() >= sizeof(u32)) {
+            tail.Read(info.render_size_literals);
+            info.render_size_record = true;
         } else {
             break;
         }
@@ -1190,7 +1240,8 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
                                        Serialization::ShaderBinaryName(program->info.pgm_hash, perm_idx),
                                        spv);
     if (spv.empty() ||
-        !BinaryMatchesMeta(spv, binary_hash, program->info.pgm_hash, perm_idx)) {
+        !BinaryMatchesMeta(spv, binary_hash, program->info.pgm_hash, perm_idx) ||
+        StaleRenderSize(program->info, spv)) {
         return false;
     }
 
@@ -1623,9 +1674,10 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
                             Serialization::ShaderBinaryName(stage->program->info.pgm_hash,
                                                             stage->perm_idx),
                             spv);
-                    if (!spv.empty() && BinaryMatchesMeta(spv, binary_hash,
-                                                          stage->program->info.pgm_hash,
-                                                          stage->perm_idx)) {
+                    if (!spv.empty() &&
+                        BinaryMatchesMeta(spv, binary_hash, stage->program->info.pgm_hash,
+                                          stage->perm_idx) &&
+                        !StaleRenderSize(stage->program->info, spv)) {
                         const auto module_started = std::chrono::steady_clock::now();
                         stage->module = CompileSPV(spv, stage->device);
                         module_time = ElapsedNs(module_started);
