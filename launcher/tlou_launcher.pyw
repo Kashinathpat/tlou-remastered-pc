@@ -1228,14 +1228,9 @@ for _code, _value in DEPTH_TEXT.items():
 # texts show the English ones.
 INFO_TEXT = {
     "pt": {
-        "ui_language": "Idioma deste launcher. O idioma do jogo vem da sua cópia (região do disco).",
-        "display": "Sem borda: janela do tamanho da tela, troca rápida com Alt+Tab. Tela cheia: modo exclusivo. Janela: janela comum.",
-        "resolution": "Tamanho em que o jogo desenha a cena. Acima de 1080p fica mais nítido e mais pesado; ao trocar, parte dos shaders recompila uma vez.",
-        "fps": "Limite de quadros por segundo. 30 deixa o ritmo mais estável em PCs fracos.",
         "upscaler": "Desenha a cena menor e amplia para a tela (FSR 3, DLSS em placas NVIDIA RTX, ou TAA). Desligado: tamanho nativo.",
         "quality": "Quanto o upscaler reduz a cena antes de ampliar: Qualidade reduz pouco, Ultra desempenho reduz mais (mais FPS, menos nitidez).",
         "vsync": "Sincroniza com a taxa do monitor: sem cortes na imagem, mas com um pouco mais de atraso nos comandos.",
-        "show_fps": "Mostra no canto da tela o FPS, o tempo de quadro e o uso de GPU, CPU e memória.",
         "ambient_half": "Desenha as sombras suaves de contato (personagens, veículos, objetos) em meia resolução em vez de um quarto: o contorno claro onde pés e rodas tocam o chão fica com metade da largura. Custa um pouco de desempenho.",
         "quarter_depth": "Mistura essas sombras usando a profundidade do mesmo pixel em que foram calculadas, em vez da do pixel mais distante: menos contorno claro ou escuro na borda dos personagens. Sem custo perceptível.",
         "motion_blur": "Desfoque de movimento do jogo ao girar a câmera e em objetos rápidos.",
@@ -1245,14 +1240,9 @@ INFO_TEXT = {
         "pro_shadows": "Sombras do sol e das luzes em resolução maior, como no PS4 Pro: mais nítidas e um pouco mais pesadas.",
     },
     "en": {
-        "ui_language": "This launcher's language. The game's language comes from your copy (the disc's region).",
-        "display": "Borderless: a screen-sized window, quick Alt+Tab. Fullscreen: exclusive mode. Windowed: a normal window.",
-        "resolution": "The size the game draws its scene at. Above 1080p it is sharper and heavier; after a change some shaders compile once.",
-        "fps": "Frame rate limit. 30 keeps the pace steadier on slower PCs.",
         "upscaler": "Draws the scene smaller and scales it to the screen (FSR 3, DLSS on NVIDIA RTX cards, or TAA). Off: native size.",
         "quality": "How much the upscaler shrinks the scene first: Quality a little, Ultra performance the most (more FPS, less sharpness).",
         "vsync": "Syncs to the monitor's refresh rate: no tearing, slightly more input delay.",
-        "show_fps": "Shows the FPS, frame time and GPU, CPU and memory use in a corner of the screen.",
         "ambient_half": "Draws the soft contact shadows (characters, vehicles, props) at half resolution instead of a quarter: the light outline where feet and wheels touch the ground is half as wide. Costs some performance.",
         "quarter_depth": "Blends those shadows with the depth of the pixel they were computed at instead of the farthest one: less light or dark outline along characters' edges. No noticeable cost.",
         "motion_blur": "The game's motion blur when turning the camera and on fast objects.",
@@ -2009,7 +1999,6 @@ class Launcher(tk.Tk):
         self.ui_labels = {name: code for code, name in UI_LANGUAGES.items()}
         self.ui_language = self.choice(panel, row, self.t("ui_language"), list(self.ui_labels),
                                        UI_LANGUAGES[self.language], self.change_language)
-        self.info(panel, row, "ui_language")
         row = self.section(panel, row + 1, self.t("video"))
         self.display_labels = self.labels(DISPLAY)
         self.display = self.choice(panel, row, self.t("display"), list(self.display_labels),
@@ -2029,13 +2018,9 @@ class Launcher(tk.Tk):
         self.show_fps = self.check(panel, row + 6, self.t("show_fps"), ini.get("show_fps", "1") == "1")
         self.ambient_half = self.check(panel, row + 7, self.t("ambient_half"), switches["ambient_half"])
         self.quarter_depth = self.check(panel, row + 8, self.t("quarter_depth"), switches["quarter_depth"])
-        self.info(panel, row, "display")
-        self.info(panel, row + 1, "resolution")
-        self.info(panel, row + 2, "fps")
         self.info(panel, row + 3, "upscaler")
         self.info(panel, row + 4, "quality")
         self.info(panel, row + 5, "vsync")
-        self.info(panel, row + 6, "show_fps")
         self.info(panel, row + 7, "ambient_half")
         self.info(panel, row + 8, "quarter_depth")
         row = self.section(panel, row + 9, self.t("game"))
