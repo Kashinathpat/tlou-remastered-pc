@@ -27,6 +27,7 @@
 #include <cstring>
 #include <vector>
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/program.h"
 
@@ -97,6 +98,34 @@ void QuarterDepthPass(IR::Program& program) {
     if (!pixel) {
         Report(program.info.pgm_hash, "no top-left texel among the gathers, left as it is");
         return;
+    }
+    // That gather samples at (x + 1/4, y + 1/4) target texels: on the boundary between two
+    // full-size pixels for a quarter-size target (4x + 1), but on a pixel's center for a half-size
+    // one (2x + 1/2, tools/probe_tlou.py AMBIENT_SHADOWS_HALF), where rounding may pick either 2x2
+    // footprint. It moves by 1/16 target texel (+1/4 or +1/8 of a pixel), into the footprint whose
+    // top-left pixel is the block's. The texel size is the shader's first two constants (s, t).
+    IR::Inst* texel_size[2]{};
+    for (IR::Block* const block : program.blocks) {
+        for (IR::Inst& inst : block->Instructions()) {
+            if (inst.GetOpcode() == IR::Opcode::ReadConst && inst.Arg(1).IsImmediate() &&
+                inst.Arg(1).U32() < 2 && !texel_size[inst.Arg(1).U32()]) {
+                texel_size[inst.Arg(1).U32()] = &inst;
+            }
+        }
+    }
+    IR::Inst* const address = top_left->Arg(2).TryInst();
+    if (!texel_size[0] || !texel_size[1] || !address ||
+        address->GetOpcode() != IR::Opcode::CompositeConstructF32x4) {
+        Report(program.info.pgm_hash, "its texel size or coordinates not found, left as it is");
+        return;
+    }
+    {
+        IR::IREmitter ir{*address->GetParent(), IR::Block::InstructionList::s_iterator_to(*address)};
+        for (u32 axis = 0; axis < 2; ++axis) {
+            const IR::F32 size = ir.BitCast<IR::F32, IR::U32>(IR::U32{IR::Value{texel_size[axis]}});
+            const IR::F32 coord{address->Arg(axis)};
+            address->SetArg(axis, ir.FPAdd(coord, ir.FPMul(size, ir.Imm32(0.0625f))));
+        }
     }
     value->SetArg(0, IR::Value{pixel});
     static bool reported = false;

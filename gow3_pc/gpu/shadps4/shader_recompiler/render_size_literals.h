@@ -8,7 +8,7 @@
 // lit material's pixel shader upsamples them with a depth-aware filter whose texel grid is
 // written into the shader as four float literals: 480, 270, 1/480 and 1/270 for a 1920x1080
 // render (about 20,000 shaders in update 1.11, none for another size). When it loads a shader
-// the game rewrites those literals for its render size (eboot 1.11 0xEA4600: every instruction
+// the game rewrites those literals for its render size (eboot 1.11 0xC3BA30: every instruction
 // literal equal to one of them becomes width / 4, height / 4, 4 / width or 4 / height; the PS4
 // Pro's 3200x1800 needed it), so the shader binary in memory depends on the render size, and its
 // hash (the one in the binary's footer) does not.
@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <array>
 #include <span>
 #include "common/types.h"
 
@@ -30,6 +31,10 @@ namespace Shader {
 /// The render size the game draws at, width | height << 16 (GOW3_GAME_RESOLUTION, set by
 /// tools/probe_tlou.py; 1920x1080 without it).
 u32 GameRenderSize();
+
+/// The four literals as the game writes them for its render size: width / 4, height / 4,
+/// 4 / width, 4 / height (single precision float words).
+std::array<u32, 4> RenderSizeLiteralWords();
 
 /// GameRenderSize() when the guest code holds one of the four literals for that size, else 0.
 u32 RenderSizeLiterals(std::span<const u32> code);

@@ -6626,6 +6626,50 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
 
 void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* prepared,
                               Shader::Backend::Bindings& binding, u32& write_index) {
+    // gow3 12 Nov 2026: GOW3_TRACE_SAMPLERS=<hex hash>,...: each distinct S# and T# these shaders
+    // bind, once (filters, mip filter, LOD range; image type, size, depth, levels).
+    static const std::vector<u64> traced = [] {
+        std::vector<u64> list;
+        for (const char* s = std::getenv("GOW3_TRACE_SAMPLERS"); s && *s;) {
+            char* next{};
+            list.push_back(std::strtoull(s, &next, 16));
+            s = next && *next == ',' ? next + 1 : nullptr;
+        }
+        return list;
+    }();
+    if (!traced.empty() && std::ranges::find(traced, stage.pgm_hash) != traced.end()) {
+        static std::mutex mutex;
+        static std::unordered_set<u64> seen;
+        std::scoped_lock lock{mutex};
+        for (const auto& sampler : stage.samplers) {
+            const auto s = sampler.GetSharp(stage);
+            u64 raw[2];
+            std::memcpy(raw, &s, sizeof(raw));
+            if (seen.insert(raw[0] ^ (raw[1] * 0x9E3779B97F4A7C15ULL) ^ stage.pgm_hash).second) {
+                std::printf("Sampler trace %08llx: S# filter mag %u min %u mip %u, lod %.2f-%.2f "
+                            "bias %.2f, aniso %.1f, clamp %u/%u/%u\n",
+                            static_cast<unsigned long long>(stage.pgm_hash),
+                            u32(s.xy_mag_filter.Value()), u32(s.xy_min_filter.Value()),
+                            u32(s.mip_filter.Value()), s.MinLod(), s.MaxLod(), s.LodBias(),
+                            s.MaxAniso(), u32(s.clamp_x.Value()), u32(s.clamp_y.Value()),
+                            u32(s.clamp_z.Value()));
+            }
+        }
+        for (const auto& image : stage.images) {
+            const auto t = image.GetSharp(stage);
+            const u64 key = (u64(t.width) | u64(t.height) << 14 | u64(t.depth) << 28 |
+                             u64(t.last_level) << 41 | u64(t.base_level) << 45 |
+                             u64(t.type) << 49) ^ (stage.pgm_hash << 7);
+            if (seen.insert(key).second) {
+                std::printf("Sampler trace %08llx: T# type %u %ux%u depth %u, levels %u-%u, "
+                            "tiling %u\n",
+                            static_cast<unsigned long long>(stage.pgm_hash), u32(t.type),
+                            u32(t.width) + 1, u32(t.height) + 1, u32(t.depth) + 1,
+                            u32(t.base_level), u32(t.last_level), u32(t.tiling_index));
+            }
+        }
+        std::fflush(stdout);
+    }
     for (u32 sampler_index = 0; sampler_index < stage.samplers.size(); ++sampler_index) {
         const auto& sampler = stage.samplers[sampler_index];
         auto ssharp =

@@ -39,7 +39,7 @@ PRESETS = {"q_native": "0", "q_quality": "1", "q_balanced": "2", "q_performance"
 RESOLUTIONS = ["1280x720", "1600x900", "1920x1080", "2560x1440", "2880x1620", "3200x1800", "3840x2160",
                "2560x1080", "3440x1440", "3840x1600", "3840x1080", "5120x1440"]
 DEFAULT_SWITCHES = {"motion_blur": False, "job_sleep": True, "profile": False, "background_shaders": True,
-                    "pro_shadows": True}
+                    "pro_shadows": True, "ambient_half": True, "quarter_depth": True}
 DEFAULT_LANGUAGE = "en"
 # What Start-TLOU-Profile.cmd sets, for the "profiler" switch.
 PROFILE_ENV = {"GOW3_PROFILE": "10", "GOW3_THREAD_IDS": "1", "GOW3_COMPUTE_WAIT_STATS": "1",
@@ -1195,6 +1195,35 @@ CLEAR_TABLE = {
 }
 for _code, _values in CLEAR_TABLE.items():
     TEXTS[_code].update(zip(CLEAR_KEYS, _values))
+# The ambient shadows' size (Video section; tools/probe_tlou.py AMBIENT_SHADOWS_HALF, #66).
+AMBIENT_TEXT = {
+    "pt": "Sombras de contato em meia resolução (menos contorno)",
+    "en": "Contact shadows at half resolution (less outline)",
+    "es": "Sombras de contacto a media resolución (menos contorno)",
+    "fr": "Ombres de contact en demi-résolution (moins de contour)",
+    "de": "Kontaktschatten in halber Auflösung (weniger Umriss)",
+    "it": "Ombre di contatto a metà risoluzione (meno contorno)",
+    "pl": "Cienie kontaktowe w połowie rozdzielczości (mniej obwódek)",
+    "ru": "Контактные тени в половинном разрешении (меньше ореола)",
+    "ja": "接地影を半分の解像度で描画（輪郭を軽減）",
+}
+for _code, _value in AMBIENT_TEXT.items():
+    TEXTS[_code]["ambient_half"] = _value
+# The quarter-size depth those shadows are blended with: the pixel they were computed at instead of
+# the farthest of each 4x4 block (GOW3_QUARTER_DEPTH, quarter_depth_pass.cpp, #5/#66).
+DEPTH_TEXT = {
+    "pt": "Alinhar sombras de contato com a borda dos objetos",
+    "en": "Align contact shadows with object edges",
+    "es": "Alinear sombras de contacto con el borde de los objetos",
+    "fr": "Aligner les ombres de contact sur le bord des objets",
+    "de": "Kontaktschatten an Objektkanten ausrichten",
+    "it": "Allinea le ombre di contatto ai bordi degli oggetti",
+    "pl": "Wyrównaj cienie kontaktowe z krawędziami obiektów",
+    "ru": "Выравнивать контактные тени по краям объектов",
+    "ja": "接地影を物体の輪郭に合わせる",
+}
+for _code, _value in DEPTH_TEXT.items():
+    TEXTS[_code]["quarter_depth"] = _value
 # Updates from the GitHub releases (launcher/updater.py): {} is the version, then the size in MB.
 UPDATE_KEYS = "update_button update_available update_confirm update_downloading update_installing update_failed update_close_game".split()
 UPDATE_TABLE = {
@@ -1541,6 +1570,8 @@ def game_env(switches, base=None, overrides=None, folders=None):
     env["GOW3_NO_MOTION_BLUR"] = "0" if switches["motion_blur"] else "1"
     env["TLOU_JOB_SLEEP"] = "1" if switches["job_sleep"] else "0"
     env["TLOU_PRO_SHADOWS"] = "1" if switches["pro_shadows"] else "0"
+    env["TLOU_AMBIENT_SHADOWS"] = "half" if switches.get("ambient_half", True) else "quarter"
+    env["GOW3_QUARTER_DEPTH"] = "1" if switches.get("quarter_depth", True) else "0"
     if switches["background_shaders"]:
         # Draws are skipped while their pipeline compiles: it pauses less. It flashed white and
         # crashed the game on 22 Oct 2026 and this switch turns it off if that comes back.
@@ -1957,7 +1988,9 @@ class Launcher(tk.Tk):
                                   key_for(self.preset_labels, ini.get("preset"), self.t("q_native")))
         self.vsync = self.check(panel, row + 5, self.t("vsync"), ini.get("vsync", "0") == "1")
         self.show_fps = self.check(panel, row + 6, self.t("show_fps"), ini.get("show_fps", "1") == "1")
-        row = self.section(panel, row + 7, self.t("game"))
+        self.ambient_half = self.check(panel, row + 7, self.t("ambient_half"), switches["ambient_half"])
+        self.quarter_depth = self.check(panel, row + 8, self.t("quarter_depth"), switches["quarter_depth"])
+        row = self.section(panel, row + 9, self.t("game"))
         self.motion_blur = self.check(panel, row, self.t("motion_blur"), switches["motion_blur"])
         self.job_sleep = self.check(panel, row + 1, self.t("job_sleep"), switches["job_sleep"])
         self.profile = self.check(panel, row + 2, self.t("profile"), switches["profile"])
@@ -2048,7 +2081,8 @@ class Launcher(tk.Tk):
 
     def switches(self):
         return {"motion_blur": self.motion_blur.get(), "job_sleep": self.job_sleep.get(), "profile": self.profile.get(),
-                "background_shaders": self.background_shaders.get(), "pro_shadows": self.pro_shadows.get()}
+                "background_shaders": self.background_shaders.get(), "pro_shadows": self.pro_shadows.get(),
+                "ambient_half": self.ambient_half.get(), "quarter_depth": self.quarter_depth.get()}
 
     def save(self):
         write_ini({"display_mode": self.display_labels[self.display.get()], "output_res": self.resolution.get(),

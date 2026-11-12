@@ -52,8 +52,11 @@ static constexpr u32 DirectMemoryMagic = 0x414d4447u;
 /// bounds-checked (SharedMemoryBoundsPass), "GLDB".
 static constexpr u32 LdsBoundsMagic = 0x42444c47u;
 /// gow3 12 Nov 2026: starts the record of the render size whose literals the game wrote into a
-/// shader's code ("GRSZ", a u32: width | height << 16, 0 for none; render_size_literals.h).
-static constexpr u32 RenderSizeMagic = 0x5a535247u;
+/// shader's code ("GRS2", a u32: width | height << 16, 0 for none; render_size_literals.h), for
+/// a shader translated with the materials' ambient shadow grid read from the texture
+/// (quarter_grid_pass.cpp). Metas with the first version of the record ("GRSZ") count as having
+/// none.
+static constexpr u32 RenderSizeMagic = 0x32535247u;
 
 /// gow3: the cache name of a shader's SPIR-V. Shaders that gained multi-wave LDS barriers get a
 /// new name, so binaries cached before the fix are not found and only those shaders recompile.
@@ -61,11 +64,11 @@ static std::string ShaderBinaryName(u64 pgm_hash, size_t perm_idx) {
     // gow3 11 Nov 2026: and shaders compiled with lanes (lane_coarsening.cpp), "_lanes2".
     const u32 lanes = Shader::Optimization::LaneCoarsening(pgm_hash);
     // gow3 12 Nov 2026: and The Last of Us' quarter-size depth written at the ambient shadows'
-    // pixels (quarter_depth_pass.cpp), "_qd".
+    // pixels (quarter_depth_pass.cpp), "_qd2".
     return fmt::format("{:#018x}_{}{}{}{}", pgm_hash, perm_idx,
                        Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "",
                        lanes > 1 ? fmt::format("_lanes{}", lanes) : std::string{},
-                       Shader::Optimization::QuarterDepthPointSample(pgm_hash) ? "_qd" : "");
+                       Shader::Optimization::QuarterDepthPointSample(pgm_hash) ? "_qd2" : "");
 }
 } // namespace Serialization
 
@@ -819,7 +822,10 @@ bool BinaryMatchesMeta(const std::vector<u32>& spv, u64 binary_hash, u64 pgm_has
 /// gow3 12 Nov 2026 (render_size_literals.h, #5/#66): whether this cached shader was translated
 /// from code the game had written another render size into. Its meta records that size; a meta
 /// of an earlier build has no record and its binary is searched for another size's literals
-/// (every cache before 11 Nov 2026 was translated at 1080p). Such a shader compiles again.
+/// (every cache before 11 Nov 2026 was translated at 1080p), and in a pixel shader for this
+/// size's too: they are the ambient shadows' grid as fixed numbers, which QuarterGridPass now
+/// reads from the texture (drawn at half size by tools/probe_tlou.py). Such a shader compiles
+/// again.
 bool StaleRenderSize(const Shader::Info& info, const std::vector<u32>& spv) {
     // GOW3_RENDER_SIZE_CACHE=0 (diagnostics): cached shaders load whatever size they were
     // translated for, as before.
@@ -831,9 +837,19 @@ bool StaleRenderSize(const Shader::Info& info, const std::vector<u32>& spv) {
         return false;
     }
     const u32 size = Shader::GameRenderSize();
+    const auto fixed_grid = [&] {
+        if (info.sw_stage != Shader::SwStage::Fragment ||
+            !Shader::Optimization::QuarterGridOn()) {
+            return false;
+        }
+        const auto words = Shader::RenderSizeLiteralWords();
+        return std::ranges::any_of(spv, [&](u32 word) {
+            return std::ranges::find(words, word) != words.end();
+        });
+    };
     const bool stale = info.render_size_record
                            ? info.render_size_literals != 0 && info.render_size_literals != size
-                           : Shader::HoldsOtherRenderSizeLiterals(spv);
+                           : Shader::HoldsOtherRenderSizeLiterals(spv) || fixed_grid();
     if (stale) {
         static std::atomic<u32> count{0};
         const u32 n = count.fetch_add(1, std::memory_order_relaxed) + 1;

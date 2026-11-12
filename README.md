@@ -92,8 +92,13 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     with the depth of the block's farthest pixel, so along an edge the ground took a character's
     unshadowed value (a light band) and the character's edge the ground's (a dark one), on a PS4
     too (a PS4 Pro's 3200x1800 makes it thinner). The port now blends with the depth the shadows
-    were computed at (`GOW3_QUARTER_DEPTH=0`: the game's), which keeps the ground's shadow up to
-    the edge; a higher Resolution makes what remains thinner.
+    were computed at (`GOW3_QUARTER_DEPTH=0`: the game's). Where a foot or a wheel touches the
+    ground both have the same depth, so the ground there still takes some of the object's value;
+    those shadows are now drawn at half the render size instead of a quarter (960x540 at 1080p,
+    finer than a PS4 Pro's 800x450), which halves that ring at some GPU cost. Both are switches in
+    the launcher's Video section: **Contact shadows at half resolution** (`TLOU_AMBIENT_SHADOWS`)
+    and **Align contact shadows with object edges** (`GOW3_QUARTER_DEPTH`). The first start after
+    the update recompiles the materials' shaders once.
 - **Not available for this game yet:** a true mouse camera (the mouse drives the right stick
   instead, though no longer capped at the stick's top speed), the draw distance sliders and
   keyboard button prompts, which need the game's own camera code, settings block and prompt

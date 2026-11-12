@@ -50,3 +50,9 @@ The Last of Us render-size literals (12 Nov 2026, #5/#66, shader_recompiler/rend
   QuarterDepthPass (quarter_depth_pass.cpp): Cs_DownsampleQuarterDepth (cs 42cb16a5) writes the
   depth of each block's top-left pixel, where the ambient shadows are computed, instead of the
   farthest of the block (cached binary "_qd"; GOW3_QUARTER_DEPTH=0 off).
+  QuarterGridPass (quarter_grid_pass.cpp): the materials' ambient shadow grid literals (as the game
+  writes them for its render size) become the size of the texture they sample (its T#), so the
+  shadows can be drawn at half size (tools/probe_tlou.py AMBIENT_SHADOWS_HALF); metas carry a
+  "GRS2" record (pixel shaders cached with the fixed grid compile again once). QuarterDepthPass
+  moves its gather by 1/16 texel (robust at half size; cached binary "_qd2"). GOW3_TRACE_SAMPLERS
+  (vk_rasterizer.cpp BindSamplers).

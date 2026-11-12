@@ -50,6 +50,10 @@ u32 GameRenderSize() {
     return size;
 }
 
+std::array<u32, 4> RenderSizeLiteralWords() {
+    return LiteralWords(GameRenderSize());
+}
+
 u32 RenderSizeLiterals(std::span<const u32> code) {
     const u32 size = GameRenderSize();
     return Holds(code, LiteralWords(size)) ? size : 0;

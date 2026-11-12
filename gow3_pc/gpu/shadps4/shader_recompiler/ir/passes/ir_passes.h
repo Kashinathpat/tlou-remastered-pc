@@ -49,6 +49,11 @@ bool MultiwaveLdsBarriers(u64 pgm_hash);
 /// cached binary has its own name).
 bool QuarterDepthPointSample(u64 pgm_hash);
 void QuarterDepthPass(IR::Program& program);
+/// gow3 12 Nov 2026 (quarter_grid_pass.cpp, The Last of Us #5/#66): the ambient shadows' grid
+/// literals of the materials (as the game writes them for its render size) become the size of
+/// the texture they sample. Returns whether it changed the shader. GOW3_QUARTER_GRID=0: off.
+bool QuarterGridOn();
+bool QuarterGridPass(IR::Program& program);
 /// gow3 11 Nov 2026: workgroup barriers inside an if whose condition differs between threads run
 /// for every thread, the if's LDS writes kept to the threads it selects (shared_memory_barrier_pass
 /// .cpp). On while UniformBarriersOn() (the pipeline cache sets it).

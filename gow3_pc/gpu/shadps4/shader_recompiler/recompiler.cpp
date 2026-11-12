@@ -124,6 +124,9 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     // gow3 12 Nov 2026 (The Last of Us, #5/#66): the quarter-size depth the ambient shadows are
     // upsampled with matches the pixels they were computed at (quarter_depth_pass.cpp).
     Shader::Optimization::QuarterDepthPass(program);
+    // And the materials' grid for those shadows follows the texture they sample
+    // (quarter_grid_pass.cpp; tools/probe_tlou.py draws them at half the render size).
+    Shader::Optimization::QuarterGridPass(program);
     if (info.sw_stage == SwStage::TessellationControl) {
         Shader::Optimization::TessellationPreprocess(program, runtime_info);
         Shader::Optimization::HullShaderTransform(program, runtime_info);

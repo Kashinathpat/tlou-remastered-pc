@@ -170,6 +170,33 @@ def aim_assist_off_patch():
 # the side, 2, 4, 8 or 16). The base PS4 creates those targets too. The flag's default (the render
 # options' initializer) is on; the rest of the Pro mode stays off (+0x42C, a faster depth clear, too).
 PRO_SHADOWS = [(0xAEB313, "C6831D02000000", "C6831D02000001")]
+# The ambient shadows (the soft contact shadows of characters, vehicles and props) at half the render
+# size instead of a quarter (TLOU_AMBIENT_SHADOWS=quarter keeps the game's). The game computes them
+# into render targets of a quarter of its size (the render target setup at 0xAD4210: width >> 2 and
+# height >> 2 at 0xAD4DED/0xAD4DFB) and every lit material upsamples them with a depth-aware filter;
+# where a foot or a wheel touches the ground both have the same depth, so the ground there takes the
+# unshadowed value of the object: a light ring a quarter-size texel or two wide (#5, #66; a PS4 Pro's
+# 3200x1800 makes it thinner). Three targets change: 0x18, the quarter-size depth
+# (Cs_DownsampleQuarterDepth, dispatched through 0xABEB20 -> 0xABE6F0, which sizes itself from the
+# target), created from the shifted registers (its call goes through the padding at 0xABE903, which
+# doubles them), and 0x3F (object +0x15A8) and 0x40 (+0x1600), the shadows before and after their
+# copy, which load the quarter size from [rbp-0x38C]/[rbp-0x358] and now load the half size the same
+# function keeps at [rbp-0x388]/[rbp-0x3B0] (from 0xAD5F9C, for target 0x4E). The ambient shadows'
+# constants (0xB26220: width, height and the full-size width over the target's as the fetch scale)
+# and dispatches follow the targets' size; the materials' 1080p grid literals, which the game
+# rewrites for a quarter of its render size, follow the texture they sample in the runtime
+# (shader_recompiler/ir/passes/quarter_grid_pass.cpp). 4x the pixels of that pass; replays on a
+# GTX 1050 Ti at 1080p showed no frame rate change (12 Nov 2026), and 2560x1440 starts and plays
+# with 1280x720 targets.
+AMBIENT_SHADOWS_HALF = [
+    (0xAD64A8, "448B8574FCFFFF", "448B8578FCFFFF"),   # target 0x3F: mov r8d, [rbp-0x388]
+    (0xAD64AF, "448B8DA8FCFFFF", "448B8D50FCFFFF"),   #              mov r9d, [rbp-0x3B0]
+    (0xAD8A02, "448B8574FCFFFF", "448B8578FCFFFF"),   # target 0x40
+    (0xAD8A09, "448B8DA8FCFFFF", "448B8D50FCFFFF"),
+    (0xAD4E06, "E89581FEFF", "E8F89AFEFF"),           # target 0x18: call 0xABE903
+    # add r8d, r8d; add r9d, r9d; jmp 0xABCFA0 (the creation call), in the padding after 0xABE8FE
+    (0xABE903, "90" * 13, "4501C0" "4501C9" "E992E6FFFF" "9090"),
+]
 # The render resolution (the launcher's Resolution, output_res in tlou.ini; TLOU_RESOLUTION=<w>x<h>
 # overrides it). The game draws its 3D scene at the size the render options' +0xF0 picks from the
 # engine's table of render sizes (0xAB0600, the debug menu's "Screen Resolution"): 0 = 3840x2160,
@@ -559,6 +586,8 @@ def main():
         patches["job-sleep"] = JOB_SLEEP
     if os.environ.get("TLOU_PRO_SHADOWS") != "0":
         patches["pro-shadows"] = PRO_SHADOWS
+    if os.environ.get("TLOU_AMBIENT_SHADOWS") != "quarter":
+        patches["ambient-shadows-half"] = AMBIENT_SHADOWS_HALF
     # The launcher's Controls > Aim assist (aim_assist in tlou.ini; TLOU_AIM_ASSIST=0/1 wins).
     aim_assist = os.environ.get("TLOU_AIM_ASSIST") or ini_value(Path(env["GOW3_CONFIG"]), "aim_assist")
     if (aim_assist or "1").strip() == "0":
