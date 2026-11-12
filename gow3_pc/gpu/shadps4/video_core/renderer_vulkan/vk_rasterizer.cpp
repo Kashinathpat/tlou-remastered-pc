@@ -3704,6 +3704,70 @@ void Rasterizer::SyncDmaMemory(const Shader::Info* stage) {
     }
 }
 
+/// gow3 12 Nov 2026 (GitHub #29, #45: pistol and rifle shots passing through walls and firefly
+/// pendants): The Last of Us asks with an occlusion query whether a character is visible under
+/// the crosshair (eboot 1.11 0xaaef10, read by player-targeting.cpp: targeting +0x4370). While it
+/// is, the player's instant bullets report only characters and shoot-through or water surfaces
+/// (contact filter 0x6b5130/0x6b5030), so a shot cannot be stopped by thin cover in front of a
+/// target. The runtime used to make up the counters (each event a step higher, so every query
+/// "saw" pixels): the crosshair was always on a character and the bullets passed through all
+/// scenery. Now the queries are Vulkan occlusion queries. Results block: `pairs` {begin, end}
+/// 64-bit counters (one per depth block), bit 63 set when written; the begin event writes the
+/// begin counters, the end event (at +8) the end ones. The begin counters are written as 0 here
+/// and the end ones cleared (not valid: the game reads an older frame's result meanwhile); the
+/// end ones get the samples (the first pair) once the GPU is past the query.
+void Rasterizer::OcclusionQueryEvent(VAddr address, u32 pairs) {
+    static constexpr u64 Valid = 1ULL << 63;
+    auto* memory = Core::Memory::Instance();
+    const auto write = [memory](VAddr at, u64 value) {
+        if (!memory->TryWriteBacking(reinterpret_cast<void*>(at), &value, sizeof(value))) {
+            std::memcpy(reinterpret_cast<void*>(at), &value, sizeof(value));
+        }
+    };
+    const VAddr block = address & ~VAddr{15};
+    if ((address & 8) == 0) {
+        for (u32 i = 0; i < pairs; ++i) {
+            write(block + i * 16, Valid);
+            write(block + i * 16 + 8, 0);
+        }
+        occlusion_block = scheduler.BeginOcclusionQuery() ? block : 0;
+        return;
+    }
+    std::vector<u32> slots;
+    if (occlusion_block == block) {
+        slots = scheduler.EndOcclusionQuery();
+    }
+    occlusion_block = 0;
+    static std::atomic<u32> queries{0}, visible{0};
+    static std::atomic<s64> last_report{0};
+    ++queries;
+    if (const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+        now - last_report.load(std::memory_order_relaxed) >= 5) {
+        s64 last = last_report.load(std::memory_order_relaxed);
+        if (last_report.compare_exchange_strong(last, now)) {
+            std::printf("Occlusion queries (5 s): %u, %u of them with visible samples\n",
+                        queries.exchange(0), visible.exchange(0));
+            std::fflush(stdout);
+        }
+    }
+    if (slots.empty()) {
+        // Without its begin (or a query pool): no samples.
+        for (u32 i = 0; i < pairs; ++i) {
+            write(block + i * 16 + 8, Valid);
+        }
+        return;
+    }
+    scheduler.DeferOperation([this, write, slots = std::move(slots), block, pairs] {
+        const u64 samples = scheduler.OcclusionQueryResult(slots);
+        visible += samples != 0;
+        for (u32 i = 0; i < pairs; ++i) {
+            write(block + i * 16 + 8, (i == 0 ? samples : 0) | Valid);
+        }
+    });
+}
+
 void Rasterizer::ReportRaycastDiag() {
     std::erase_if(raycast_diag_outputs, [this](const auto& r) { return !IsMapped(r.first, r.second); });
     if (!raycast_diag_outputs.empty()) {

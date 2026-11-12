@@ -145,6 +145,77 @@ void Scheduler::EndRendering() {
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
 }
 
+u32 Scheduler::AcquireOcclusionSlot() {
+    const u32 slot = occlusion_next;
+    occlusion_next = (occlusion_next + 1) % OcclusionPoolSize;
+    return slot;
+}
+
+bool Scheduler::BeginOcclusionQuery() {
+    std::scoped_lock lock{occlusion_mutex};
+    if (!occlusion_pool) {
+        if (occlusion_pool_failed) {
+            return false;
+        }
+        const vk::QueryPoolCreateInfo info = {
+            .queryType = vk::QueryType::eOcclusion,
+            .queryCount = OcclusionPoolSize,
+        };
+        auto created = instance.GetDevice().createQueryPoolUnique(info);
+        if (created.result != vk::Result::eSuccess) {
+            occlusion_pool_failed = true;
+            LOG_ERROR(Render_Vulkan, "Occlusion query pool: {}", vk::to_string(created.result));
+            return false;
+        }
+        occlusion_pool = std::move(created.value);
+        // Every slot reset once on the host: a slot's first reset in a command buffer is then
+        // not its first use either way.
+        instance.GetDevice().resetQueryPool(*occlusion_pool, 0, OcclusionPoolSize);
+    }
+    // Queries begin and end outside rendering (a reset must, and the query spans render passes).
+    EndRendering();
+    if (occlusion_active) {
+        // A query left open (a guest begin without its end): ended here, its samples lost.
+        const u32 open = occlusion_slots.back();
+        Record([pool = *occlusion_pool, open](vk::CommandBuffer cmdbuf) { cmdbuf.endQuery(pool, open); });
+    }
+    const u32 slot = AcquireOcclusionSlot();
+    occlusion_slots.assign(1, slot);
+    occlusion_active = true;
+    Record([pool = *occlusion_pool, slot](vk::CommandBuffer cmdbuf) {
+        cmdbuf.resetQueryPool(pool, slot, 1);
+        cmdbuf.beginQuery(pool, slot, {});
+    });
+    return true;
+}
+
+std::vector<u32> Scheduler::EndOcclusionQuery() {
+    std::scoped_lock lock{occlusion_mutex};
+    if (!occlusion_active) {
+        return {};
+    }
+    EndRendering();
+    Record([pool = *occlusion_pool, slot = occlusion_slots.back()](vk::CommandBuffer cmdbuf) {
+        cmdbuf.endQuery(pool, slot);
+    });
+    occlusion_active = false;
+    return std::exchange(occlusion_slots, {});
+}
+
+u64 Scheduler::OcclusionQueryResult(std::span<const u32> slots) {
+    u64 total = 0;
+    for (const u32 slot : slots) {
+        u64 samples = 0;
+        const auto result = instance.GetDevice().getQueryPoolResults(
+            *occlusion_pool, slot, 1, sizeof(samples), &samples, sizeof(samples),
+            vk::QueryResultFlagBits::e64);
+        if (result == vk::Result::eSuccess) {
+            total += samples;
+        }
+    }
+    return total;
+}
+
 void Scheduler::TraceDirectRecording(void* caller) {
     static const bool enabled = [] {
         const char* env = std::getenv("GOW3_RECORDER_TRACE");
@@ -719,6 +790,13 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
+    // gow3 12 Nov 2026: an occlusion query cannot span command buffers: an open one ends in this
+    // one and goes on in a new slot in the next (EndOcclusionQuery returns both).
+    std::unique_lock occlusion_lock{occlusion_mutex};
+    const bool occlusion_continues = occlusion_active;
+    if (occlusion_continues) {
+        current_cmdbuf.endQuery(*occlusion_pool, occlusion_slots.back());
+    }
     if (host_read_barrier) {
 #pragma push_macro("MemoryBarrier")
 #undef MemoryBarrier
@@ -780,6 +858,15 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     work_semaphore.Refresh();
     AllocateWorkerCommandBuffers();
+    if (occlusion_continues) {
+        const u32 slot = AcquireOcclusionSlot();
+        occlusion_slots.push_back(slot);
+        Record([pool = *occlusion_pool, slot](vk::CommandBuffer cmdbuf) {
+            cmdbuf.resetQueryPool(pool, slot, 1);
+            cmdbuf.beginQuery(pool, slot, {});
+        });
+    }
+    occlusion_lock.unlock();
 
     // Apply pending operations
     PopPendingOperations();

@@ -944,7 +944,18 @@ public:
 
     static std::mutex submit_mutex;
 
+    /// gow3 12 Nov 2026: guest occlusion queries (ZPASS_DONE events) as Vulkan occlusion
+    /// queries. BeginOcclusionQuery() ends rendering and records a reset and begin on a free
+    /// slot (false: no query pool); EndOcclusionQuery() ends rendering, records the end and
+    /// returns the slots holding the query's samples: more than one when a submission came in
+    /// between (SubmitExecution ends the active query in the submitted command buffer and begins
+    /// a new slot in the next one). OcclusionQueryResult() sums them once the GPU is past them.
+    bool BeginOcclusionQuery();
+    std::vector<u32> EndOcclusionQuery();
+    u64 OcclusionQueryResult(std::span<const u32> slots);
+
 private:
+    u32 AcquireOcclusionSlot(); ///< occlusion_mutex held
     void AllocateWorkerCommandBuffers();
 
     std::unique_ptr<RecordChunk> AcquireChunk();
@@ -977,6 +988,15 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    /// Occlusion queries (BeginOcclusionQuery): the pool, the next slot, and the active query's
+    /// slots (the last one open in the command buffer being recorded).
+    static constexpr u32 OcclusionPoolSize = 1024;
+    std::mutex occlusion_mutex;
+    vk::UniqueQueryPool occlusion_pool;
+    bool occlusion_pool_failed = false;
+    u32 occlusion_next = 0;
+    bool occlusion_active = false;
+    std::vector<u32> occlusion_slots;
     // gow3: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     std::vector<std::unique_ptr<RecordChunk>> full_chunks;

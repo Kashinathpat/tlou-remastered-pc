@@ -157,6 +157,12 @@ public:
     /// `protected_only` (compute releases): only the read-protected ones (eop_readbacks); the
     /// others need the graphics fence to wait for them.
     bool ReadBackEopResults(bool protected_only = false);
+    /// gow3 12 Nov 2026: a guest occlusion query event (EVENT_WRITE ZPASS_DONE, a pixel-pipe stat
+    /// dump) at `address`, in order with the draws: the begin (address 16-byte aligned) or the end
+    /// (+8) of a query whose results block holds `pairs` {begin, end} counter pairs, one per
+    /// depth block. Begins and ends a Vulkan occlusion query; the end counters get the samples
+    /// (with their valid bit) once the GPU is past the query.
+    void OcclusionQueryEvent(VAddr address, u32 pairs);
     /// gow3 25 Oct 2026 (GOW3_DMA_EOP_READBACK): the small GPU-side DMA copies into guest memory
     /// since the last label (dma_results) are read back now, unprotected; true if some were.
     bool ReadBackDmaResults();
@@ -554,6 +560,8 @@ private:
     /// frames, then one of 25-35 ms). Opt-in, GOW3_OPEN_RAYCAST_READBACKS=1: measured on the
     /// rooftops it removed the faults on ray-cast pages but not the uneven frames (18 Oct).
     std::vector<std::pair<VAddr, u64>> eop_open_readbacks;
+    /// The results block of the guest occlusion query being recorded (OcclusionQueryEvent).
+    VAddr occlusion_block = 0;
     /// gow3 12 Nov 2026 (GitHub #29, #45): The Last of Us's mesh ray casts (meshraycaster.cpp:
     /// bullet impacts, characters' foot probes). Cs_RayTraceGatherHits writes a batch's closest
     /// hits (16 rays, 64 bytes each) and Cs_MemCpy (82c46b8b) copies that 1 KiB block to a GPU

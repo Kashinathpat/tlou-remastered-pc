@@ -36,14 +36,16 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     an area is played. The game's own frame watchdog is patched from 2 s to 20 s for that
     (`TLOU_FIXES=none` leaves the game unpatched). If a load ever hangs, start with
     `GOW3_FRAMES_IN_FLIGHT=0` (slower).
-  - Shots that passed through objects with no effect (firefly pendants that could not be shot
-    down, GitHub #29, #45; walls that took no bullet holes from a pistol or rifle while a shotgun
-    marked them) had the same cause as the NPC jumps: the game's mesh ray casts (bullet impacts,
-    characters' foot probes) run on the GPU, and the CPU read their results before the GPU had
-    written them, so a shot took the hit of an earlier, unrelated ray. In a replay with the old
-    behaviour about 3 in 4 hits the game read were another ray's; now none are. The results are
-    always read back now, also with `GOW3_TLOU_MEMCPY_READBACK=0`. Not yet confirmed at a pendant
-    in game: report it if one still cannot be shot down.
+  - Pistol and rifle shots that went through scenery with no effect (firefly pendants that could
+    not be shot down, GitHub #29, #45; walls that took no bullet holes from a pistol or rifle while
+    a shotgun marked them) are fixed. The game asks the GPU, with an occlusion query, whether a
+    character is under the crosshair; while one is, the player's bullets ignore scenery so thin
+    cover in front of a target does not stop them. The runtime made up the answers to occlusion
+    queries (always "visible"), so the bullets ignored scenery all the time; the queries are now
+    real Vulkan occlusion queries (`GOW3_OCCLUSION_QUERIES=0` goes back to the made-up answers).
+    The bullet impacts' mesh ray casts (and the characters' foot probes, as in the NPC jumps)
+    also came back to the CPU before the GPU had written them; those results are always read back
+    now, also with `GOW3_TLOU_MEMCPY_READBACK=0`.
   - On NVIDIA graphics cards older than Turing (GTX 900 and 10 series), the game's cloth solver for
     its largest cloths (`Cs_ClothSimulate512`) lost the Vulkan device in Pittsburgh, once Henry and
     Sam appear: the runtime stopped with `Device lost during submit`, and Windows' System event log

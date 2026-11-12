@@ -1266,6 +1266,18 @@ void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
                 (header->type3.count.Value() - 2) * sizeof(u32));
 }
 
+/// gow3 12 Nov 2026: an occlusion query event (ZPASS_DONE), in order with the draws.
+struct OcclusionEvent {
+    VAddr address;
+    u32 pairs;
+};
+
+void RunOcclusionQuery(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    OcclusionEvent event;
+    std::memcpy(&event, data, sizeof(event));
+    rasterizer.OcclusionQueryEvent(event.address, event.pairs);
+}
+
 void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto& event_eos = *reinterpret_cast<const PM4CmdEventWriteEos*>(data);
     // Copies deferred to the recording thread precede writes the guest sees.
@@ -2278,13 +2290,28 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     // registers: ApplyGraphicsRegisterPacket
                 } else if (event->event_index.Value() == EventIndex::ZpassDone) {
                     if (event->event_type.Value() == EventType::PixelPipeStatDump) {
-                        static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
-                        static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
-                        u64* results = event->Address<u64*>();
-                        for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
-                            *results = pixel_counter | OcclusionCounterValidMask;
+                        // gow3 12 Nov 2026: real occlusion queries (Rasterizer::OcclusionQueryEvent:
+                        // The Last of Us's bullets went through scenery while the made-up counters
+                        // below said a character was under the crosshair). GOW3_OCCLUSION_QUERIES=0:
+                        // the made-up counters (every query sees pixels).
+                        static const bool real_queries = [] {
+                            const char* env = std::getenv("GOW3_OCCLUSION_QUERIES");
+                            return !(env && env[0] == '0');
+                        }();
+                        if (rasterizer && real_queries) {
+                            const OcclusionEvent occlusion{event->Address<VAddr>(),
+                                                           u32(num_counter_pairs)};
+                            rasterizer->RunInOrder(&RunOcclusionQuery, &occlusion,
+                                                   sizeof(occlusion));
+                        } else {
+                            static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
+                            static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
+                            u64* results = event->Address<u64*>();
+                            for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
+                                *results = pixel_counter | OcclusionCounterValidMask;
+                            }
+                            pixel_counter += OcclusionCounterStep;
                         }
-                        pixel_counter += OcclusionCounterStep;
                     }
                 }
                 break;
