@@ -105,6 +105,10 @@ STARTUP = [
         ("Escritas ao lado de dados da GPU sem espera", "GOW3_SHARE_UNFINISHED_WRITES", "1", "0", True),
         ("Resultados de DMA no fim do pipe", "GOW3_DMA_EOP_READBACK", "1", "0", True),
         ("Cópia de imagens minúsculas (foco da mira)", "GOW3_TINY_IMAGE_READBACK", "1", "0", True),
+        # GitHub #57/#63: NPCs jumping or bobbing (vk_rasterizer.cpp TlouMemCpyEopReadback), and
+        # the cloth joint results of every cloth size (TlouClothResults).
+        ("Leitura das cópias da GPU (NPCs pulando)", "GOW3_TLOU_MEMCPY_READBACK", "1", "0", True),
+        ("Juntas do tecido em todos os tamanhos", "GOW3_CLOTH_ALL_SIZES", "1", "0", True),
         ("Acesso direto à memória", "GOW3_DIRECT_MEMORY_ACCESS", "1", "0", True),
         ("TSC nativo", "GOW3_NATIVE_TSC", "1", "0", True),
         ("Buffer grande de staging reservado", "GOW3_STAGING_LARGE_MB", "128", "0", True),
@@ -538,6 +542,15 @@ DEBUG_TEXT = {
         'Wysoki priorytet wątków GPU',
         'Высокий приоритет потоков GPU',
         'GPU スレッドの高優先度'),
+    'Prioridades das threads do jogo': (
+        "Game thread priorities",
+        'Prioridades de los hilos del juego',
+        'Priorités des threads du jeu',
+        'Prioritäten der Spiel-Threads',
+        'Priorità dei thread del gioco',
+        'Priorytety wątków gry',
+        'Приоритеты потоков игры',
+        'ゲームスレッドの優先度'),
     'Quadros em andamento': (
         'Frames in flight',
         'Fotogramas en curso',
@@ -637,6 +650,24 @@ DEBUG_TEXT = {
         'Kopia maleńkich obrazów (ostrość celownika)',
         'Копия крошечных изображений (фокус прицела)',
         '極小画像のコピー(照準フォーカス)'),
+    'Leitura das cópias da GPU (NPCs pulando)': (
+        'GPU copy readback (NPCs jumping)',
+        'Lectura de las copias de la GPU (NPC saltando)',
+        'Relecture des copies GPU (PNJ qui sautent)',
+        'Rücklesen der GPU-Kopien (springende NPCs)',
+        'Rilettura delle copie GPU (NPC che saltano)',
+        'Odczyt kopii z GPU (skaczący NPC)',
+        'Обратное чтение копий GPU (прыгающие NPC)',
+        'GPU コピーの読み戻し (NPC が跳ねる)'),
+    'Juntas do tecido em todos os tamanhos': (
+        'Cloth joints for every cloth size',
+        'Articulaciones de la tela en todos los tamaños',
+        'Articulations du tissu pour toutes les tailles',
+        'Stoffgelenke für alle Stoffgrößen',
+        'Giunti del tessuto per tutte le dimensioni',
+        'Stawy tkaniny we wszystkich rozmiarach',
+        'Суставы ткани для всех размеров',
+        'すべてのサイズの布のジョイント'),
     'Acesso direto à memória': (
         'Direct memory access',
         'Acceso directo a la memoria',

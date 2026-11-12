@@ -277,7 +277,7 @@ void runtime_exec_watch_retarget(uint64_t address) {
 }
 /* Diagnostics: up to 4 read/write data watches (4 bytes each, absolute addresses) in place of
  * the current ones, every thread re-armed (needs GOW3_EXEC_WATCH set at start, e.g. r:0, and a
- * long GOW3_EXEC_WATCH_SECONDS). Called by the GPU library (GOW3_MEMCPY_READ_WATCH). */
+ * long GOW3_EXEC_WATCH_SECONDS). Called by the GPU library (GOW3_RESULT_WATCH). */
 void runtime_exec_watch_set_reads(const uint64_t *addresses, int count) {
     if (count>4) count=4;
     for (int i=0;i<4;++i) exec_watch[i]=i<count ? (addresses[i]&~3ull)|(1ull<<62) : 0;

@@ -877,7 +877,7 @@ bool Copy64EopReadback() {
 /// slot 5); relaxed readbacks left it the stale bytes there. Precise readbacks fixed both but
 /// broke textures, and reading back every buffer these shaders write froze the game (up to 9 MiB,
 /// and pages the CPU uses). GOW3_EOP_READBACK_SHADERS=<hex>[:<slot>],...: other bindings in place
-/// of these two (without a slot: every written binding of up to 64 KiB).
+/// of the list below (without a slot: every written binding of up to 64 KiB).
 static const std::vector<std::pair<u64, u32>>& TlouEopReadbackList();
 static bool TlouEopReadbackBinding(u64 hash, u32 slot) {
     return std::ranges::any_of(TlouEopReadbackList(), [hash, slot](const auto& b) {
@@ -892,9 +892,43 @@ static bool TlouResultShader(u64 hash) {
                                [hash](const auto& b) { return b.first == hash; });
 }
 
+/// gow3 12 Nov 2026 (GitHub #57, #63: NPCs shaking or bobbing up and down at the hydroelectric
+/// plant, Ellie sinking in Bill's Town): those two are the 128-vertex members of the cloth
+/// solver's families (bin/shaders/bytecode/Cs_ClothSimulate<N>.cxo, slot 6, and
+/// Cs_ClothOutputJointsOnly<N>.cxo, slot 5; tools/tlou_find_shader.py). The 64-, 256- and
+/// 512-vertex ones are the same code with another workgroup size and write the same 48-byte joint
+/// records (e44070db slot 6: 4896 bytes = 102 joints), but were left relaxed: their characters
+/// got joints a frame old. CPU data watches (GOW3_RESULT_WATCH) caught the game's joint copy
+/// (memcpy from the cloth object's output pointer, called at eboot 1.11 0xac2640) reading both
+/// e30509e8 slot 5 and 35e207bf slot 5. All sizes are read back now, update 1.11 and base game
+/// 1.00 (whose slots are taken to be the same: the same sources): in Pittsburgh ~40% more joint
+/// results. This alone did not stop the jumps on the player's save (TlouMemCpyEopReadback did).
+/// GOW3_CLOTH_ALL_SIZES=0: only the 128-vertex pair, as before.
+static std::vector<std::pair<u64, u32>> TlouClothResults() {
+    static const bool all_sizes = [] {
+        const char* env = std::getenv("GOW3_CLOTH_ALL_SIZES");
+        const bool on = !(env && env[0] == '0');
+        std::printf("Cloth joint readbacks: %s\n",
+                    on ? "every cloth size (64-512 vertices)" : "128-vertex cloth only");
+        std::fflush(stdout);
+        return on;
+    }();
+    if (!all_sizes) {
+        return {{0x106beafd, 6}, {0xe30509e8, 5}};
+    }
+    return {
+        // Update 1.11: Cs_ClothSimulate64/128/256/512, Cs_ClothOutputJointsOnly64/128/256/512.
+        {0x4ddcc090, 6}, {0x106beafd, 6}, {0x12c24522, 6}, {0xe44070db, 6},
+        {0x5e2411ef, 5}, {0xe30509e8, 5}, {0x58986479, 5}, {0x35e207bf, 5},
+        // Base game 1.00.
+        {0x76fcf947, 6}, {0x697cfcc4, 6}, {0x9f58511d, 6}, {0xa9b60b18, 6},
+        {0xbc6e2746, 5}, {0x2198bf5b, 5}, {0x9ee7c53a, 5}, {0x3cc9b591, 5},
+    };
+}
+
 static const std::vector<std::pair<u64, u32>>& TlouEopReadbackList() {
     static const std::vector<std::pair<u64, u32>> bindings = [] {
-        std::vector<std::pair<u64, u32>> list{{0x106beafd, 6}, {0xe30509e8, 5}};
+        std::vector<std::pair<u64, u32>> list = TlouClothResults();
         if (const char* env = std::getenv("GOW3_EOP_READBACK_SHADERS")) {
             list.clear();
             for (const char* p = env; *p;) {
@@ -922,8 +956,32 @@ static bool DmaEopReadbacks() {
     return VideoCore::BufferCache::DmaEopReadbacks();
 }
 
+/// gow3 12 Nov 2026 (The Last of Us Remastered, GitHub #57/#63: NPCs bobbing up and down; idea
+/// from KyrieFrost's experimental patch in #63): The Last of Us's copy of 6a6422a9 is
+/// Cs_MemCpy.cxo (82c46b8b). A precise-readback session on the player's save 2 (Pittsburgh,
+/// "Fuga da cidade") had no jumps, and its read faults were mostly the game reading what
+/// 82c46b8b copied (1 KiB copies): among others the cloth joint routine (eboot 1.11 0xac2768,
+/// the 0x140-byte block at [cloth object + 0x120]) and pointer tables (0xb299c0, 0xb29bdd).
+/// Read back like 6a6422a9's: only the dwords written, copies of up to 64 KiB (~150 a second
+/// there, ~170 KiB/s). Same save, player at the controls: without it the NPCs jumped (twice),
+/// with it they did not, at the same ~36-38 FPS (the precise session ran at ~32). An earlier
+/// test with CPU data watches on sampled copies saw no reads: it only ever sampled the first
+/// copies of a frame, into another ring (GOW3_RESULT_WATCH has the same bias).
+/// GOW3_TLOU_MEMCPY_READBACK=0 turns it off.
+static bool TlouMemCpyEopReadback() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("GOW3_TLOU_MEMCPY_READBACK");
+        const bool on = !(env && env[0] == '0');
+        std::printf("Cs_MemCpy (82c46b8b) end-of-pipe readbacks: %s\n", on ? "on" : "off");
+        std::fflush(stdout);
+        return on;
+    }();
+    return enabled;
+}
+
 bool IsEopReadbackShader(u64 hash) {
-    return (hash == 0xc92150ba || (hash == 0x6a6422a9 && Copy64EopReadback())) &&
+    return (hash == 0xc92150ba || (hash == 0x6a6422a9 && Copy64EopReadback()) ||
+            (hash == 0x82c46b8b && TlouMemCpyEopReadback())) &&
            EopReadbackMode() != 0;
 }
 
@@ -5708,46 +5766,59 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     VideoCore::NoteGpuWriter(vsharp.base_address, size, stage.pgm_hash);
                     VideoCore::NoteRecentGpuWrite(vsharp.base_address, size,
                                                   (u64(stage.pgm_hash) << 8) | (binding.buffer & 0xff));
-                    // gow3 12 Nov 2026 diagnostics (GOW3_MEMCPY_READ_WATCH=1, with
-                    // GOW3_EXEC_WATCH=r:0): does guest code touch what Cs_MemCpy (82c46b8b)
-                    // writes? Every 250 ms the destination of one small copy (<= 64 KiB) gets 4
-                    // CPU data watches (first, quarter, half, last dword); guest code that reads
-                    // or writes them is logged as "Watch:" lines (probe.c watch_hit).
-                    if (stage.pgm_hash == 0x82c46b8b && compute_stage) {
-                        static const bool memcpy_watch = [] {
-                            const char* env = std::getenv("GOW3_MEMCPY_READ_WATCH");
-                            return env && env[0] == '1';
-                        }();
-                        const auto ud = stage.UserData();
-                        if (memcpy_watch && vsharp.stride == 4 && ud.size() > 6) {
-                            const u64 count = std::min<u64>(
-                                {u64(CsRegs().dim_x) * 64, ud[6], vsharp.num_records});
-                            const u64 bytes = std::min<u64>(size, count * 4);
-                            static std::atomic<s64> last_ms{0};
-                            const s64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                                std::chrono::steady_clock::now().time_since_epoch())
-                                                .count();
-                            s64 last = last_ms.load(std::memory_order_relaxed);
-                            if (bytes >= 4 && bytes <= 64_KB && now - last >= 250 &&
-                                last_ms.compare_exchange_strong(last, now)) {
-                                const VAddr dst = vsharp.base_address;
-                                const u64 lastw = (bytes - 4) & ~3ull;
-                                // Slot 3 (dr6 bit 3): the copy's source, a control.
-                                const VAddr src = stage.buffers.empty()
-                                                      ? 0
-                                                      : stage.buffers[0].GetSharp(stage).base_address;
-                                const uint64_t watch[4] = {dst, dst + ((bytes / 2) & ~3ull),
-                                                           dst + lastw, src};
-                                runtime_exec_watch_set_reads(watch, src ? 4 : 3);
-                                std::printf("MemCpy watch: t %lld ms src %#llx dst %#llx bytes %llu "
-                                            "(groups %u, s6 %u, records %u)\n",
-                                            static_cast<long long>(now),
-                                            static_cast<unsigned long long>(src),
-                                            static_cast<unsigned long long>(dst),
-                                            static_cast<unsigned long long>(bytes),
-                                            CsRegs().dim_x, ud[6], vsharp.num_records);
-                                std::fflush(stdout);
+                    // gow3 12 Nov 2026 diagnostics (GOW3_RESULT_WATCH=<hash>:<slot>[,...], with
+                    // GOW3_EXEC_WATCH=r:0 and GOW3_WATCH_HOST=1): does guest code read what these
+                    // compute bindings (<= 64 KiB) write? Every 250 ms one of them (each in turn)
+                    // gets CPU data watches on its first, middle and last dword ("Result watch:"
+                    // lines, then the "Watch:" lines of probe.c watch_hit). Biased: each turn
+                    // takes the first matching dispatch after the interval, so outputs written
+                    // later in a frame (another ring) may never be watched; no hits is no proof.
+                    if (compute_stage) {
+                        static const auto result_watch = [] {
+                            std::vector<std::pair<u64, u32>> list;
+                            for (const char* p = std::getenv("GOW3_RESULT_WATCH"); p && *p;) {
+                                char* end = nullptr;
+                                const u64 hash = std::strtoull(p, &end, 16);
+                                if (end == p || *end != ':') {
+                                    break;
+                                }
+                                const u32 slot = u32(std::strtoul(end + 1, &end, 10));
+                                list.emplace_back(hash, slot);
+                                p = *end == ',' ? end + 1 : end;
                             }
+                            return list;
+                        }();
+                        static std::array<std::atomic<s64>, 16> entry_last{};
+                        static std::atomic<s64> any_last{0};
+                        for (size_t i = 0; i < result_watch.size() && i < entry_last.size(); ++i) {
+                            if (result_watch[i].first != stage.pgm_hash ||
+                                result_watch[i].second != binding.buffer || size < 4 ||
+                                size > 64_KB) {
+                                continue;
+                            }
+                            const s64 now =
+                                std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+                            const s64 turn = 250 * s64(result_watch.size());
+                            s64 last = any_last.load(std::memory_order_relaxed);
+                            if (now - last < 250 ||
+                                now - entry_last[i].load(std::memory_order_relaxed) < turn ||
+                                !any_last.compare_exchange_strong(last, now)) {
+                                break;
+                            }
+                            entry_last[i].store(now, std::memory_order_relaxed);
+                            const VAddr dst = vsharp.base_address;
+                            const uint64_t watch[3] = {dst, dst + ((size / 2) & ~3ull),
+                                                       dst + ((size - 4) & ~3ull)};
+                            runtime_exec_watch_set_reads(watch, 3);
+                            std::printf("Result watch: t %lld ms %08llx:%u dst %#llx bytes %llu\n",
+                                        static_cast<long long>(now),
+                                        static_cast<unsigned long long>(stage.pgm_hash),
+                                        binding.buffer, static_cast<unsigned long long>(dst),
+                                        static_cast<unsigned long long>(size));
+                            std::fflush(stdout);
+                            break;
                         }
                     }
                     if (VideoCore::BufferCache::ShareUnfinishedWrites() &&
@@ -5786,7 +5857,9 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                         // while its two large copies per frame (~0.2 and ~2.4 MB, never read in
                         // a precise-readback run) were 300 MB/s of readback.
                         u64 readback_size = size;
-                        if (stage.pgm_hash == 0x6a6422a9) {
+                        const bool copy64 =
+                            stage.pgm_hash == 0x6a6422a9 || stage.pgm_hash == 0x82c46b8b;
+                        if (copy64) {
                             const auto ud = stage.UserData();
                             readback_size = 0;
                             if (vsharp.stride == 4 && ud.size() > 6) {
@@ -5804,9 +5877,34 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                             return open && open[0] == '1' && !(defer && defer[0] == '0');
                         }();
                         if (readback_size) {
-                            (open_raycasts && stage.pgm_hash != 0x6a6422a9 ? eop_open_readbacks
-                                                                          : eop_readbacks)
+                            (open_raycasts && !copy64 ? eop_open_readbacks : eop_readbacks)
                                 .emplace_back(vsharp.base_address, readback_size);
+                        }
+                        if (stage.pgm_hash == 0x82c46b8b) {
+                            // The copied dwords are results the game reads: not shared with the
+                            // CPU while the copy is pending (as TlouResultShader's pages).
+                            if (readback_size && VideoCore::BufferCache::ShareUnfinishedWrites()) {
+                                buffer_cache.NoteResultPages(vsharp.base_address, readback_size);
+                            }
+                            // Every 5 s: how many copies were read back, and how many were too
+                            // large (over 64 KiB, left relaxed).
+                            static std::atomic<u32> copies{0}, large{0};
+                            static std::atomic<u64> bytes{0};
+                            static std::atomic<s64> last_report{0};
+                            ++(readback_size ? copies : large);
+                            bytes += readback_size;
+                            const s64 now =
+                                std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+                            if (s64 last = last_report.load(std::memory_order_relaxed);
+                                now - last >= 5 && last_report.compare_exchange_strong(last, now)) {
+                                std::printf("Cs_MemCpy readbacks (5 s): %u copies, %.1f KiB; %u "
+                                            "larger copies left relaxed\n",
+                                            copies.exchange(0), double(bytes.exchange(0)) / 1024,
+                                            large.exchange(0));
+                                std::fflush(stdout);
+                            }
                         }
                     }
                     // Small writes (constants) and writes into windows where the CPU writes into

@@ -27,9 +27,11 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
 - **Frame pacing:** frame times swing while the game runs below its limit, and a fixed 30 FPS limit
   (launcher, or the in-game menu) makes motion clearly more even.
 - **Known issues:**
-  - NPCs sometimes move in jumps. It comes and goes between runs of the same build; the cause is
-    not settled. The bursts of long frames that seemed to go with it shrank with the faster guest
-    condition variables, and a fixed 30 FPS limit had no jumps in the sessions tried.
+  - NPCs moving in jumps or bobbing up and down (GitHub #57, #63): the game read some results of
+    its GPU memory copy shader (`Cs_MemCpy`) a frame late. They are read back now; in a save where
+    they jumped every time, they stopped. Tested on one save and one GPU so far: report it if they
+    still jump somewhere (`GOW3_TLOU_MEMCPY_READBACK=0` turns the fix off for comparison). Thanks
+    to KyrieFrost, whose experimental patch in #63 pointed at that shader.
   - A frame that compiles many new shaders can pause the game for a moment, mostly the first time
     an area is played. The game's own frame watchdog is patched from 2 s to 20 s for that
     (`TLOU_FIXES=none` leaves the game unpatched). If a load ever hangs, start with
