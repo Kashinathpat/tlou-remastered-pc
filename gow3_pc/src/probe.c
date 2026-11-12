@@ -232,6 +232,28 @@ static LONG watch_hit(EXCEPTION_POINTERS *info) {
             if (v-(uintptr_t)image<0x2000000) { n+=snprintf(line+n,sizeof(line)-n," %#llx",(unsigned long long)(v-(uintptr_t)image)); ++found; }
         }
         puts(line); fflush(stdout);
+    } else if (image && c->Rip-(uintptr_t)image>=0x2000000) {
+        /* GOW3_WATCH_HOST=1: host code too (HLE library calls such as memcpy made by the game:
+         * guest return addresses on the stack), as "Watch host:" lines. */
+        static int host=-1;
+        if (host<0) { const char *e=getenv("GOW3_WATCH_HOST"); host=e && e[0]=='1'; }
+        static volatile LONG host_hits;
+        if (host && InterlockedIncrement(&host_hits)<=max_hits) {
+            char line[600];
+            HMODULE mod=NULL; char name[MAX_PATH]="?";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,(LPCSTR)(uintptr_t)c->Rip,&mod))
+                GetModuleFileNameA(mod,name,sizeof(name));
+            const char *base_name=strrchr(name,'\\'); base_name=base_name ? base_name+1 : name;
+            int n=snprintf(line,sizeof(line),"Watch host: dr6 %#llx thread %lu rip %s+%#llx guest callers",
+                           (unsigned long long)dr6,(unsigned long)GetCurrentThreadId(),base_name,
+                           (unsigned long long)(c->Rip-(uintptr_t)mod));
+            const uint64_t *stack=(const uint64_t *)(uintptr_t)c->Rsp;
+            for (int i=0,found=0;i<512 && found<6 && n<(int)sizeof(line)-24;++i) {
+                uint64_t v=stack[i];
+                if (v-(uintptr_t)image<0x2000000) { n+=snprintf(line+n,sizeof(line)-n," %#llx",(unsigned long long)(v-(uintptr_t)image)); ++found; }
+            }
+            puts(line); fflush(stdout);
+        }
     }
     return EXCEPTION_CONTINUE_EXECUTION;
 #undef hits
@@ -252,6 +274,15 @@ void runtime_exec_watch_retarget(uint64_t address) {
     InterlockedExchange(&exec_watch_armed_count,0);
     printf("Exec watch: data watch moved to %#llx\n",(unsigned long long)address);
     fflush(stdout);
+}
+/* Diagnostics: up to 4 read/write data watches (4 bytes each, absolute addresses) in place of
+ * the current ones, every thread re-armed (needs GOW3_EXEC_WATCH set at start, e.g. r:0, and a
+ * long GOW3_EXEC_WATCH_SECONDS). Called by the GPU library (GOW3_MEMCPY_READ_WATCH). */
+void runtime_exec_watch_set_reads(const uint64_t *addresses, int count) {
+    if (count>4) count=4;
+    for (int i=0;i<4;++i) exec_watch[i]=i<count ? (addresses[i]&~3ull)|(1ull<<62) : 0;
+    exec_watch_count=count;
+    InterlockedExchange(&exec_watch_armed_count,0);
 }
 static const char *exec_watch_file;
 static void poll_exec_watch_file(void);

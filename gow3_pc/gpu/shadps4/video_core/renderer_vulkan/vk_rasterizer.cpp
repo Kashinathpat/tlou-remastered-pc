@@ -58,6 +58,7 @@ static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
 }
 
 extern "C" void runtime_exec_watch_retarget(uint64_t address);
+extern "C" void runtime_exec_watch_set_reads(const uint64_t* addresses, int count);
 namespace {
 // gow3 16 Oct: a depth image sampled by a draw that also has it as its depth attachment
 // (a half-resolution depth, 960x540 D32S8, with depth writes on) used to be bound as
@@ -5707,6 +5708,48 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     VideoCore::NoteGpuWriter(vsharp.base_address, size, stage.pgm_hash);
                     VideoCore::NoteRecentGpuWrite(vsharp.base_address, size,
                                                   (u64(stage.pgm_hash) << 8) | (binding.buffer & 0xff));
+                    // gow3 12 Nov 2026 diagnostics (GOW3_MEMCPY_READ_WATCH=1, with
+                    // GOW3_EXEC_WATCH=r:0): does guest code touch what Cs_MemCpy (82c46b8b)
+                    // writes? Every 250 ms the destination of one small copy (<= 64 KiB) gets 4
+                    // CPU data watches (first, quarter, half, last dword); guest code that reads
+                    // or writes them is logged as "Watch:" lines (probe.c watch_hit).
+                    if (stage.pgm_hash == 0x82c46b8b && compute_stage) {
+                        static const bool memcpy_watch = [] {
+                            const char* env = std::getenv("GOW3_MEMCPY_READ_WATCH");
+                            return env && env[0] == '1';
+                        }();
+                        const auto ud = stage.UserData();
+                        if (memcpy_watch && vsharp.stride == 4 && ud.size() > 6) {
+                            const u64 count = std::min<u64>(
+                                {u64(CsRegs().dim_x) * 64, ud[6], vsharp.num_records});
+                            const u64 bytes = std::min<u64>(size, count * 4);
+                            static std::atomic<s64> last_ms{0};
+                            const s64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::steady_clock::now().time_since_epoch())
+                                                .count();
+                            s64 last = last_ms.load(std::memory_order_relaxed);
+                            if (bytes >= 4 && bytes <= 64_KB && now - last >= 250 &&
+                                last_ms.compare_exchange_strong(last, now)) {
+                                const VAddr dst = vsharp.base_address;
+                                const u64 lastw = (bytes - 4) & ~3ull;
+                                // Slot 3 (dr6 bit 3): the copy's source, a control.
+                                const VAddr src = stage.buffers.empty()
+                                                      ? 0
+                                                      : stage.buffers[0].GetSharp(stage).base_address;
+                                const uint64_t watch[4] = {dst, dst + ((bytes / 2) & ~3ull),
+                                                           dst + lastw, src};
+                                runtime_exec_watch_set_reads(watch, src ? 4 : 3);
+                                std::printf("MemCpy watch: t %lld ms src %#llx dst %#llx bytes %llu "
+                                            "(groups %u, s6 %u, records %u)\n",
+                                            static_cast<long long>(now),
+                                            static_cast<unsigned long long>(src),
+                                            static_cast<unsigned long long>(dst),
+                                            static_cast<unsigned long long>(bytes),
+                                            CsRegs().dim_x, ud[6], vsharp.num_records);
+                                std::fflush(stdout);
+                            }
+                        }
+                    }
                     if (VideoCore::BufferCache::ShareUnfinishedWrites() &&
                         (TlouResultShader(stage.pgm_hash) || automatic_result)) {
                         buffer_cache.NoteResultPages(vsharp.base_address, size);
