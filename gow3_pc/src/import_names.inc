@@ -968,6 +968,7 @@
 {"oBr313PppNE#libkernel","sendto"},
 {"TUuiYS2kE8s#libkernel","shutdown"},
 {"BOwybKVa3Do#libSceRemoteplay","sceRemoteplayTerminate"},
+{"g3PNjYKWqnQ#libSceRemoteplay","sceRemoteplayGetConnectionStatus"},
 {"eiuobaF-hK4#libSceRtc","sceRtcFormatRFC2822"},
 {"18B2NS1y9UU#libSceRtc","sceRtcGetCurrentTick"},
 {"NxEI1KByvCI#libSceRtc","sceRtcParseDateTime"},

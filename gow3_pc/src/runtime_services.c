@@ -49,6 +49,12 @@ static ABI int32_t remoteplay_initialize(void) {
     note("Remote Play initialized (local execution, streaming unavailable)");
     return 0;
 }
+/* The 1.00 executable asks whether a Remote Play session is connected: never here. */
+static ABI int32_t remoteplay_connection_status(int32_t user,int32_t *status) {
+    (void)user;
+    if (status) *status=0; /* SCE_REMOTEPLAY_CONNECTION_STATUS_DISCONNECT */
+    return 0;
+}
 
 /* ---- UserService ---- */
 static int login_event_pending=1;
@@ -902,7 +908,8 @@ static const RuntimeExport exports[]={
     {"sceNpSnsFacebookDialogUpdateStatus",facebook_status}, {"sceNpSnsFacebookDialogTerminate",facebook_term},
     {"sceNpSnsFacebookDialogGetResult",profile_result},
     {"sceCoredumpRegisterCoredumpHandler",ok_void}, {"sceCoredumpWriteUserData",ok_void},
-    {"sceRemoteplayTerminate",ok_void}, {"sceLibcHeapGetTraceInfo",heap_trace_info},
+    {"sceRemoteplayTerminate",ok_void}, {"sceRemoteplayGetConnectionStatus",remoteplay_connection_status},
+    {"sceLibcHeapGetTraceInfo",heap_trace_info},
     {"sceDiscMapFunc_7C980FFB0AA27E7A",discmap_8a82},
 };
 uintptr_t runtime_services_resolve(const char *name) {

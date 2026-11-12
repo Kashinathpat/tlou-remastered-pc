@@ -30,6 +30,28 @@ def find_update(game):
     return None
 
 
+def base_executable(eboot):
+    """True when `eboot` is version 1.00's executable: it imports sceRemoteplayGetConnectionStatus
+    (NID g3PNjYKWqnQ), which 1.11's no longer does."""
+    try:
+        with open(eboot, "rb") as f:
+            tail = b""
+            while chunk := f.read(1 << 22):
+                if b"g3PNjYKWqnQ" in tail + chunk:
+                    return True
+                tail = chunk[-10:]
+    except OSError:
+        pass
+    return False
+
+
+def merged_with_base_executable(game):
+    """A game folder the update was merged into (it holds patch.psarc) whose eboot.bin is still
+    1.00's: the merge kept the game's executable (12 Nov 2026 reports; 1.00 then stopped at
+    sceRemoteplayGetConnectionStatus)."""
+    return (game / "patch.psarc").is_file() and base_executable(game / "eboot.bin")
+
+
 def app_version(folder):
     """APP_VER from the folder's sce_sys/param.sfo, or None."""
     sys.path.insert(0, str(ROOT / "gow3_pc/scripts"))
@@ -333,6 +355,12 @@ def main():
     else:
         print(f"Game {game} (version {app_version(game)}); no update found next to it "
               f"({game.name}-patch or {game.name}-update, or TLOU_UPDATE=<folder>)", flush=True)
+        if merged_with_base_executable(game):
+            print("WARNING: update 1.11's files were merged into this folder, but its eboot.bin is still "
+                  "version 1.00's, which the port does not run (it stops during start). "
+                  "Copy the update's eboot.bin, sce_module and sce_sys over the game's (replace the "
+                  f"files), or keep the update in its own folder next to the game ({game.name}-patch).",
+                  flush=True)
     out = ROOT / "analysis/tlou"
     user = ROOT / "analysis/tlou-user"
     user.mkdir(parents=True, exist_ok=True)

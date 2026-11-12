@@ -1207,6 +1207,55 @@ UPDATE_TABLE = {
 }
 for _code, _values in UPDATE_TABLE.items():
     TEXTS[_code].update(zip(UPDATE_KEYS, _values))
+# Shown on PLAY (which then stops) when the update was merged into the game folder but its eboot.bin is still 1.00's
+# (tools/probe_tlou.py merged_with_base_executable); {} is the game folder's name.
+MERGED_TEXT = {
+    "pt": "Os arquivos da atualização 1.11 foram mesclados nesta pasta, mas o eboot.bin ainda é o da versão 1.00, "
+          "e o port só roda o executável da 1.11.\n\nCopie eboot.bin, sce_module e sce_sys da atualização por cima "
+          "dos do jogo (substituindo os arquivos), ou deixe a atualização numa pasta própria ao lado do jogo ({}-patch).",
+    "en": "Update 1.11's files were merged into this folder, but its eboot.bin is still version 1.00's, and the port "
+          "only runs 1.11's executable.\n\nCopy the update's eboot.bin, sce_module and sce_sys over the game's "
+          "(replacing the files), or keep the update in its own folder next to the game ({}-patch).",
+    "es": "Los archivos de la actualización 1.11 se combinaron en esta carpeta, pero su eboot.bin sigue siendo el de "
+          "la versión 1.00, y el port solo ejecuta el de la 1.11.\n\nCopia eboot.bin, sce_module y sce_sys de la "
+          "actualización sobre los del juego (reemplazando los archivos), o deja la actualización en su propia "
+          "carpeta junto al juego ({}-patch).",
+    "fr": "Les fichiers de la mise à jour 1.11 ont été fusionnés dans ce dossier, mais son eboot.bin est toujours "
+          "celui de la version 1.00, et le port n'exécute que celui de la 1.11.\n\nCopiez eboot.bin, sce_module et "
+          "sce_sys de la mise à jour par-dessus ceux du jeu (en remplaçant les fichiers), ou gardez la mise à jour "
+          "dans son propre dossier à côté du jeu ({}-patch).",
+    "de": "Die Dateien von Update 1.11 wurden in diesen Ordner kopiert, aber die eboot.bin ist noch die von Version "
+          "1.00, und der Port startet nur die von 1.11.\n\nKopiere eboot.bin, sce_module und sce_sys des Updates "
+          "über die des Spiels (Dateien ersetzen) oder lege das Update in einen eigenen Ordner neben dem Spiel "
+          "({}-patch).",
+    "it": "I file dell'aggiornamento 1.11 sono stati uniti in questa cartella, ma il suo eboot.bin è ancora quello "
+          "della versione 1.00, e il port avvia solo quello della 1.11.\n\nCopia eboot.bin, sce_module e sce_sys "
+          "dell'aggiornamento sopra quelli del gioco (sostituendo i file), oppure tieni l'aggiornamento in una "
+          "cartella a parte accanto al gioco ({}-patch).",
+    "pl": "Pliki aktualizacji 1.11 zostały scalone z tym folderem, ale jego eboot.bin to nadal wersja 1.00, a port "
+          "uruchamia tylko plik z 1.11.\n\nSkopiuj eboot.bin, sce_module i sce_sys z aktualizacji na pliki gry "
+          "(zastępując je) albo trzymaj aktualizację w osobnym folderze obok gry ({}-patch).",
+    "ru": "Файлы обновления 1.11 объединены с этой папкой, но eboot.bin в ней всё ещё от версии 1.00, а порт "
+          "запускает только файл версии 1.11.\n\nСкопируйте eboot.bin, sce_module и sce_sys из обновления поверх "
+          "файлов игры (с заменой) или держите обновление в отдельной папке рядом с игрой ({}-patch).",
+    "ja": "このフォルダーにはアップデート 1.11 のファイルが統合されていますが、eboot.bin はまだバージョン 1.00 のもので、"
+          "移植版は 1.11 の実行ファイルでしか動きません。\n\nアップデートの eboot.bin、sce_module、sce_sys をゲームの"
+          "ものに上書きコピーするか、アップデートをゲームの隣の専用フォルダー({}-patch)に置いてください。",
+}
+for _code, _value in MERGED_TEXT.items():
+    TEXTS[_code]["merged_old_exe"] = _value
+
+
+def merged_with_base_executable(game):
+    """tools/probe_tlou.py's check; False when it can't be loaded."""
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import probe_tlou
+        return probe_tlou.merged_with_base_executable(Path(game))
+    except Exception:
+        return False
+    finally:
+        sys.path.pop(0)
 
 BG, PANEL, TEXT, MUTED, ACCENT, ACCENT_HOT = "#090909", "#141414", "#ece9e2", "#8f8f88", "#c8862a", "#e4a23f"
 DISABLED, ERROR = "#2b2b2b", "#e06c5a"
@@ -1996,6 +2045,10 @@ class Launcher(tk.Tk):
 
     def play(self):
         self.save()
+        game = game_folder(self.folders)
+        if merged_with_base_executable(game):
+            messagebox.showerror(self.title(), self.t("merged_old_exe").format(game.name), parent=self)
+            return
         self.play_button.config(state="disabled", text=self.t("starting"), bg=DISABLED)
         env = game_env(self.switches(), overrides=self.overrides, folders=self.folders)
         if self.profile.get():
