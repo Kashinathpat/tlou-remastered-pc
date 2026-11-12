@@ -84,6 +84,9 @@ enum {
     TLOU_PLAYER_OF = 0x49c630,    /* player object for a camera's player id (camera + 0xf0), or NULL */
     TLOU_PITCH_STEP = 0x754610,   /* float step(curve, pitch, delta) */
 };
+enum {
+    TLOU_PITCH_DEGREES_PER_STEP = 57, /* camera pitch per unit of the step's delta (half the curve) */
+};
 typedef ABI void *(*TlouPlayerOf)(uint32_t id);
 typedef ABI float (*TlouPitchStep)(void *curve, float pitch, float delta);
 
@@ -201,7 +204,8 @@ static ABI void *tlou_camera_input(unsigned char *camera, const float *stick, vo
     if (!camera || !image) return NULL;
     float *direction = (float *)(camera + 0x1e0);
     if (!((TlouPlayerOf)(image + TLOU_PLAYER_OF))(*(const uint32_t *)(camera + 0xf0))) return NULL;
-    __atomic_store_n(&camera_called_ms, now_ms(), __ATOMIC_RELAXED);
+    /* with its yaw locked the camera does not take the mouse (the stick path does the same) */
+    if (!camera[0x1d0 + 0x28]) __atomic_store_n(&camera_called_ms, now_ms(), __ATOMIC_RELAXED);
     const uint32_t frame = tlou_frame();
     float dx = 0, dy = 0;
     const int took = frame_look(camera, frame, &dx, &dy);
@@ -215,27 +219,34 @@ static ABI void *tlou_camera_input(unsigned char *camera, const float *stick, vo
             asked = angle * 57.29578f;
         }
         if (dy != 0.0f) {
-            const float *f = (const float *)camera;
-            /* the stick's full turn rates: yaw degrees/s, pitch curve units/s */
-            float yaw_full = f[0x4dc / 4];
-            if (f[0x208 / 4] > 0.0f && f[0x208 / 4] < yaw_full) yaw_full = f[0x208 / 4];
-            yaw_full *= f[0x510 / 4];
-            const float pitch_full = f[0x4f0 / 4] * f[0x514 / 4];
-            if (yaw_full > 1e-3f && pitch_full > 0.0f && isfinite(yaw_full) && isfinite(pitch_full)) {
-                const float delta = dy * per_count * 57.29578f * look_vertical() * (pitch_full / yaw_full);
-                float *pitch = (float *)(camera + 0x380);
-                const float next = ((TlouPitchStep)(image + TLOU_PITCH_STEP))(camera + 0x220, *pitch, delta);
-                if (isfinite(next)) {
-                    *pitch = next;
-                    *(float *)(camera + 0x340) = next;
-                }
+            /* 12 Nov 2026 (GitHub #123, looking up and down was slow): the step's delta is in
+             * half-ranges of the vertical curve (it works on 2 * (pitch - 0.5)), and the curve
+             * spans about 114 degrees (measured in Pittsburgh: +52.5 at 0, -61.3 at 1, steady
+             * 12 degrees/s for 18.9 asked through the old stick-rate ratio 2.7 / 240). So one
+             * delta unit is about 57 degrees: the mouse now pitches as many degrees per count as
+             * it turns. */
+            const float delta = dy * per_count * 57.29578f * look_vertical() / TLOU_PITCH_DEGREES_PER_STEP;
+            float *pitch = (float *)(camera + 0x380);
+            const float next = ((TlouPitchStep)(image + TLOU_PITCH_STEP))(camera + 0x220, *pitch, delta);
+            if (isfinite(next)) {
+                *pitch = next;
+                *(float *)(camera + 0x340) = next;
             }
         }
         /* as the stick does: no recentring for a while after input */
         *(uint32_t *)(camera + 0x390) = frame;
         camera[0x370] = 0;
     }
-    if (look_debug()) turn_debug(&follow_debug, heading_of(direction), asked, NULL);
+    if (look_debug()) {
+        /* the vertical curve position and the camera's pitch from its last locator (+0x150, a
+         * rotation quaternion x y z w; forward is +z) */
+        const float *q = (const float *)(camera + 0x150);
+        const float forward_y = 2.0f * (q[1] * q[2] - q[3] * q[0]);
+        char extra[96];
+        snprintf(extra, sizeof(extra), ", curve %.3f, pitch %.1f", *(const float *)(camera + 0x380),
+                 asinf(forward_y < -1.0f ? -1.0f : forward_y > 1.0f ? 1.0f : forward_y) * 57.29578f);
+        turn_debug(&follow_debug, heading_of(direction), asked, extra);
+    }
     return NULL;
 }
 
@@ -287,11 +298,14 @@ static ABI void *tlou_aim_input(void *out, unsigned char *controller, void *stic
 }
 
 /* A camera hook ran in the last 60 ms (a frame at 20 FPS): the mouse turns the camera directly;
- * otherwise (cutscenes, cameras without a hook) it is the right stick. */
+ * otherwise (cutscenes, cameras without a hook) it is the right stick. 12 Nov 2026 (GitHub #123,
+ * a pushed crate's camera did not turn with the mouse): the aim controller is updated every frame,
+ * aiming or not, so it counts only while the aim button is held; the third-person camera's input
+ * step runs only while that camera is in use. */
 int runtime_mouselook_camera_recent(void) {
     const uint64_t now = now_ms();
     return now - __atomic_load_n(&camera_called_ms, __ATOMIC_RELAXED) < 60 ||
-           now - __atomic_load_n(&aim_called_ms, __ATOMIC_RELAXED) < 60;
+           (runtime_pad_aim_held() && now - __atomic_load_n(&aim_called_ms, __ATOMIC_RELAXED) < 60);
 }
 
 int runtime_mouselook_aim_recent(void) {
