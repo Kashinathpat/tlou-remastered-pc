@@ -3,12 +3,12 @@
  *
  * Default keyboard and mouse layout (GOW3_KEY_MAP / GOW3_MOUSE_MAP change it, see
  * apply_button_map; the launcher's Controls tab writes them):
- *   WASD left stick, mouse (or the arrow keys) right stick, right mouse L2 (aim), left mouse
- *   R2 (fire), Space Cross (jump), Left Ctrl Circle (cover, roll), F Square (melee),
- *   R Triangle (reload, pick up), Q / mouse X1 L1, E / mouse X2 R1, Left Shift L3,
- *   V / middle mouse R3, Escape or Enter Options, Tab left touchpad, Backspace right touchpad,
- *   1 2 3 4 d-pad left right up down, mouse wheel d-pad right (up) and left (down), G shake,
- *   Left Alt walk (the left stick goes only part way: walk_speed; walk_toggle switches it).
+ *   WASD or the arrow keys left stick, mouse right stick (no camera keys), right mouse L2 (aim),
+ *   left mouse R2 (fire), Space or Enter Cross, C Circle, F Square, E Triangle, Left Shift L1,
+ *   Tab R1, V L3, T R3, Escape or Backspace Options, Caps Lock left touchpad (no right touchpad
+ *   key), 1 2 3 4 d-pad left right up down, mouse wheel d-pad right (up) and left (down),
+ *   G shake, Left Ctrl walk (the left stick goes only part way: walk_speed; walk_toggle switches
+ *   it). 12 Nov 2026: the player's layout, which replaced the earlier defaults.
  * GOW3_KEYBOARD=0 turns the keyboard off. The controls (maps, mouse on, its sensitivity and
  * vertical invert, button icons) come from the settings (gow3gpu.h Gow3Controls: the in-game
  * menu's Controls tab and the launcher's; GOW3_MOUSE=0, GOW3_MOUSE_SENS, GOW3_MOUSE_INVERT=1,
@@ -192,11 +192,11 @@ static const ButtonMap default_pad_map={{
     {SDL_GAMEPAD_BUTTON_MISC1,PAD_SHAKE},
 },16};
 static const ButtonMap default_key_map={{
-    {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LCTRL,BTN_CIRCLE}, {SDL_SCANCODE_F,BTN_SQUARE},
-    {SDL_SCANCODE_R,BTN_TRIANGLE}, {SDL_SCANCODE_Q,BTN_L1}, {SDL_SCANCODE_E,BTN_R1},
-    {SDL_SCANCODE_LSHIFT,BTN_L3}, {SDL_SCANCODE_V,BTN_R3},
-    {SDL_SCANCODE_ESCAPE,BTN_OPTIONS}, {SDL_SCANCODE_RETURN,BTN_OPTIONS},
-    {SDL_SCANCODE_TAB,CLICK_LEFT}, {SDL_SCANCODE_BACKSPACE,CLICK_RIGHT},
+    {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_RETURN,BTN_CROSS}, {SDL_SCANCODE_C,BTN_CIRCLE},
+    {SDL_SCANCODE_F,BTN_SQUARE}, {SDL_SCANCODE_E,BTN_TRIANGLE}, {SDL_SCANCODE_LSHIFT,BTN_L1},
+    {SDL_SCANCODE_TAB,BTN_R1}, {SDL_SCANCODE_V,BTN_L3}, {SDL_SCANCODE_T,BTN_R3},
+    {SDL_SCANCODE_ESCAPE,BTN_OPTIONS}, {SDL_SCANCODE_BACKSPACE,BTN_OPTIONS},
+    {SDL_SCANCODE_CAPSLOCK,CLICK_LEFT},
     {SDL_SCANCODE_1,BTN_LEFT}, {SDL_SCANCODE_2,BTN_RIGHT}, {SDL_SCANCODE_3,BTN_UP}, {SDL_SCANCODE_4,BTN_DOWN},
     {SDL_SCANCODE_G,PAD_SHAKE},
 },17};
@@ -204,9 +204,8 @@ static const ButtonMap default_key_map={{
 enum { MOUSE_LEFT=1, MOUSE_MIDDLE, MOUSE_RIGHT, MOUSE_X1, MOUSE_X2, MOUSE_WHEEL_UP, MOUSE_WHEEL_DOWN };
 static const char *const mouse_names[]={"left","middle","right","x1","x2","wheel_up","wheel_down"};
 static const ButtonMap default_mouse_map={{
-    {MOUSE_RIGHT,BTN_L2}, {MOUSE_LEFT,BTN_R2}, {MOUSE_MIDDLE,BTN_R3}, {MOUSE_X1,BTN_L1}, {MOUSE_X2,BTN_R1},
-    {MOUSE_WHEEL_UP,BTN_RIGHT}, {MOUSE_WHEEL_DOWN,BTN_LEFT},
-},7};
+    {MOUSE_RIGHT,BTN_L2}, {MOUSE_LEFT,BTN_R2}, {MOUSE_WHEEL_UP,BTN_RIGHT}, {MOUSE_WHEEL_DOWN,BTN_LEFT},
+},4};
 /* Keys that move a stick: ls_up ls_down ls_left ls_right (left stick), rs_* (right stick), and
  * walk (11 Nov 2026: the left stick, keys or controller, goes only to walk_speed while it is
  * held, or after a press with walk_toggle). */
@@ -215,8 +214,8 @@ static const char *const stick_key_names[STICK_KEYS]={"ls_up","ls_down","ls_left
 typedef struct { struct { int source, direction; } entries[32]; size_t count; } StickKeyMap;
 static const StickKeyMap default_stick_keys={{
     {SDL_SCANCODE_W,LS_UP}, {SDL_SCANCODE_S,LS_DOWN}, {SDL_SCANCODE_A,LS_LEFT}, {SDL_SCANCODE_D,LS_RIGHT},
-    {SDL_SCANCODE_UP,RS_UP}, {SDL_SCANCODE_DOWN,RS_DOWN}, {SDL_SCANCODE_LEFT,RS_LEFT}, {SDL_SCANCODE_RIGHT,RS_RIGHT},
-    {SDL_SCANCODE_LALT,WALK_KEY},
+    {SDL_SCANCODE_UP,LS_UP}, {SDL_SCANCODE_DOWN,LS_DOWN}, {SDL_SCANCODE_LEFT,LS_LEFT}, {SDL_SCANCODE_RIGHT,LS_RIGHT},
+    {SDL_SCANCODE_LCTRL,WALK_KEY},
 },9};
 /* The maps in use: the defaults with the settings' maps applied (sync_controls). */
 static ButtonMap pad_map, key_map, mouse_map;
@@ -313,7 +312,7 @@ static void describe_map(const ButtonMap *map, const StickKeyMap *sticks, int ki
         {"cross",BTN_CROSS}, {"circle",BTN_CIRCLE}, {"square",BTN_SQUARE}, {"triangle",BTN_TRIANGLE},
         {"l1",BTN_L1}, {"r1",BTN_R1}, {"l2",BTN_L2}, {"r2",BTN_R2}, {"l3",BTN_L3}, {"r3",BTN_R3},
         {"options",BTN_OPTIONS}, {"touchpad_left",CLICK_LEFT}, {"touchpad_right",CLICK_RIGHT},
-        {"up",BTN_UP}, {"down",BTN_DOWN}, {"left",BTN_LEFT}, {"right",BTN_RIGHT},
+        {"up",BTN_UP}, {"down",BTN_DOWN}, {"left",BTN_LEFT}, {"right",BTN_RIGHT}, {"shake",PAD_SHAKE},
     };
     size_t used=0;
     out[0]=0;
@@ -350,7 +349,7 @@ void runtime_pad_effective_maps(const char *pad_spec, const char *key_spec, cons
 }
 
 /* The settings' controls as the pad last applied them (sync_controls). */
-static Gow3Controls controls={.mouse=1,.prompts=-1,.mouse_sens=1.0f,.stick_speed=1.0f,.walk_speed=0.5f};
+static Gow3Controls controls={.mouse=1,.prompts=-1,.mouse_sens=1.0f,.stick_speed=1.0f,.walk_speed=0.75f};
 
 static int keyboard_enabled(void) {
     static int enabled=-1;

@@ -93,7 +93,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         return;
     }
     if (key == "walk_speed") {
-        v.walk_speed = f > 0.0f ? Clamp(f, 0.1f, 1.0f) : 0.5f;
+        v.walk_speed = f > 0.0f ? Clamp(f, 0.1f, 1.0f) : 0.75f;
         return;
     }
     if (key == "stick_speed") {

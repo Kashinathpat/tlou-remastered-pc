@@ -120,7 +120,7 @@ struct Values {
     /// 11 Nov 2026: the walk key (key map "walk") toggles instead of acting while held, and how
     /// far the left stick goes while walking.
     std::atomic<bool> walk_toggle{false};
-    std::atomic<float> walk_speed{0.5f};
+    std::atomic<float> walk_speed{0.75f};
     /// 11 Nov 2026: the controller vibrates when the game asks (off: scePadSetVibration stops it).
     std::atomic<bool> vibration{true};
     std::atomic<int> prompts{-1};

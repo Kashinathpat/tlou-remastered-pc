@@ -615,6 +615,8 @@ struct ControlAction {
     const char* fixed_pad[2]; // the controller's own source (Xbox, PlayStation), not rebindable
     bool stick;        // a stick direction: keys only
 };
+// 12 Nov 2026: rows named by the PS4 button they press, in the launcher's order (the earlier
+// labels were another game's actions, wrong for this one).
 constexpr ControlAction control_actions[] = {
     {"ls_up", "Move forward", {"Left stick", "Left stick"}, true},
     {"ls_down", "Move back", {"Left stick", "Left stick"}, true},
@@ -625,28 +627,30 @@ constexpr ControlAction control_actions[] = {
     {"rs_down", "Look down", {"Right stick", "Right stick"}, true},
     {"rs_left", "Look left", {"Right stick", "Right stick"}, true},
     {"rs_right", "Look right", {"Right stick", "Right stick"}, true},
-    {"left", "D-pad left", {}, false},
-    {"right", "D-pad right", {}, false},
+    {"cross", "Cross", {}, false},
+    {"circle", "Circle", {}, false},
+    {"square", "Square", {}, false},
+    {"triangle", "Triangle", {}, false},
+    {"l1", "L1", {}, false},
+    {"r1", "R1", {}, false},
+    {"l2", "L2 (aim)", {"LT", "L2"}, false},
+    {"r2", "R2 (fire)", {"RT", "R2"}, false},
+    {"l3", "L3", {}, false},
+    {"r3", "R3", {}, false},
+    {"options", "Options (pause)", {}, false},
+    {"touchpad_left", "Touchpad, left side", {"LB + View", "L1 + Share"}, false},
+    {"touchpad_right", "Touchpad, right side", {}, false},
+    {"shake", "Shake the controller (flashlight)", {}, false},
     {"up", "D-pad up", {}, false},
     {"down", "D-pad down", {}, false},
-    {"cross", "Jump, climb", {}, false},
-    {"circle", "Cover, roll, drop", {}, false},
-    {"square", "Melee", {}, false},
-    {"triangle", "Reload, pick up", {}, false},
-    {"l2", "Aim", {"LT", "L2"}, false},
-    {"r2", "Fire", {"RT", "R2"}, false},
-    {"l1", "Grenade aim", {}, false},
-    {"r1", "Grenade throw", {}, false},
-    {"l3", "Left stick press", {}, false},
-    {"r3", "Right stick press", {}, false},
-    {"options", "Pause menu", {}, false},
-    {"touchpad_left", "Touchpad left", {"LB + View", "L1 + Share"}, false},
-    {"touchpad_right", "Touchpad right", {}, false},
+    {"left", "D-pad left", {}, false},
+    {"right", "D-pad right", {}, false},
 };
 constexpr int ControlCount = int(std::size(control_actions));
 // Group headings before these rows.
-constexpr std::pair<int, const char*> control_groups[] = {{0, "Movement and camera"}, {9, "Weapons (d-pad)"},
-                                                          {13, "Actions"}};
+constexpr std::pair<int, const char*> control_groups[] = {
+    {0, "Movement"}, {5, "Camera"}, {9, "Buttons"}, {23, "D-pad"}};
+static_assert(ControlCount == 27, "control_groups indexes");
 
 struct ControlBinding {
     std::vector<std::string> keys; // SDL key names
@@ -823,7 +827,7 @@ void ResetControls() {
     s.prompts = -1;
     s.stick_speed = 1.0f;
     s.walk_toggle = false;
-    s.walk_speed = 0.5f;
+    s.walk_speed = 0.75f;
     s.vibration = true;
     Gow3Settings::ControlsChanged();
     dirty = true;
@@ -982,6 +986,20 @@ bool HandleMenuCaptureEvent(const SDL_Event& event) {
     default:
         return false;
     }
+}
+
+// A key as the menu shows it: SDL's scancode names (the saved form) with a few made readable.
+std::string KeyLabel(const std::string& name) {
+    static const std::pair<const char*, const char*> labels[] = {
+        {"Return", "Enter"},         {"Escape", "Esc"},          {"CapsLock", "Caps Lock"},
+        {"Up", "Up arrow"},          {"Down", "Down arrow"},     {"Left", "Left arrow"},
+        {"Right", "Right arrow"},    {"Left GUI", "Left Windows"}, {"Right GUI", "Right Windows"},
+        {"PageUp", "Page Up"},       {"PageDown", "Page Down"},  {"Numlock", "Num Lock"},
+        {"ScrollLock", "Scroll Lock"}, {"PrintScreen", "Print Screen"}, {"Keypad Enter", "Keypad Enter"}};
+    for (const auto& [id, label] : labels) {
+        if (name == id) return label;
+    }
+    return name;
 }
 
 const char* MouseLabel(const std::string& name) {
@@ -1198,7 +1216,7 @@ void ControlsTab() {
             ImGui::TableNextColumn();
             std::string keys;
             for (const std::string& key : binding.keys) {
-                keys += (keys.empty() ? "" : " / ") + key;
+                keys += (keys.empty() ? "" : " / ") + KeyLabel(key);
             }
             BindingButton(i, CaptureKey, keys);
             ImGui::TableNextColumn();

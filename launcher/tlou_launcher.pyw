@@ -770,14 +770,15 @@ CONTROLS = [
 ]
 # runtime_pad.c's defaults: [(kind, name)], kind "key" (SDL scancode name) or "mouse".
 DEFAULT_CONTROLS = {
-    "ls_up": [("key", "W")], "ls_down": [("key", "S")], "ls_left": [("key", "A")], "ls_right": [("key", "D")],
-    "walk": [("key", "Left Alt")],
-    "rs_up": [("key", "Up")], "rs_down": [("key", "Down")], "rs_left": [("key", "Left")], "rs_right": [("key", "Right")],
-    "cross": [("key", "Space")], "circle": [("key", "Left Ctrl")], "square": [("key", "F")], "triangle": [("key", "R")],
-    "l1": [("key", "Q"), ("mouse", "x1")], "r1": [("key", "E"), ("mouse", "x2")], "l2": [("mouse", "right")],
-    "r2": [("mouse", "left")], "l3": [("key", "Left Shift")], "r3": [("key", "V"), ("mouse", "middle")],
-    "options": [("key", "Escape"), ("key", "Return")], "touchpad_left": [("key", "Tab")],
-    "touchpad_right": [("key", "Backspace")], "shake": [("key", "G")],
+    "ls_up": [("key", "W"), ("key", "Up")], "ls_down": [("key", "S"), ("key", "Down")],
+    "ls_left": [("key", "A"), ("key", "Left")], "ls_right": [("key", "D"), ("key", "Right")],
+    "walk": [("key", "Left Ctrl")],
+    "rs_up": [], "rs_down": [], "rs_left": [], "rs_right": [],
+    "cross": [("key", "Space"), ("key", "Return")], "circle": [("key", "C")], "square": [("key", "F")],
+    "triangle": [("key", "E")], "l1": [("key", "Left Shift")], "r1": [("key", "Tab")], "l2": [("mouse", "right")],
+    "r2": [("mouse", "left")], "l3": [("key", "V")], "r3": [("key", "T")],
+    "options": [("key", "Escape"), ("key", "Backspace")], "touchpad_left": [("key", "CapsLock")],
+    "touchpad_right": [], "shake": [("key", "G")],
     "up": [("key", "3")], "down": [("key", "4")], "left": [("key", "1"), ("mouse", "wheel_down")],
     "right": [("key", "2"), ("mouse", "wheel_up")],
 }
@@ -2524,7 +2525,7 @@ class Launcher(tk.Tk):
         row = tk.Frame(card, bg=BG)
         row.pack(anchor="w", fill="x", padx=12, pady=(0, 12))
         vibration = tk.BooleanVar(value=read_ini().get("vibration", "1") != "0")
-        state = {"reader": None, "held": set(), "flash": {}, "lookup": {}, "walk_toggle": False, "walk_speed": 0.5,
+        state = {"reader": None, "held": set(), "flash": {}, "lookup": {}, "walk_toggle": False, "walk_speed": 0.75,
                  "walking": False, "walk_was": False, "job": None}
 
         def test():
@@ -2572,9 +2573,9 @@ class Launcher(tk.Tk):
                                for source in sources if source}
             state["walk_toggle"] = ini.get("walk_toggle", "0") == "1"
             try:
-                state["walk_speed"] = min(max(float(ini.get("walk_speed", "0.5")), 0.1), 1.0)
+                state["walk_speed"] = min(max(float(ini.get("walk_speed", "0.75")), 0.1), 1.0)
             except ValueError:
-                state["walk_speed"] = 0.5
+                state["walk_speed"] = 0.75
 
         def key_press(event):
             name = key_from_event(event.keysym, event.keycode)
@@ -2770,7 +2771,7 @@ class Launcher(tk.Tk):
             bindings.clear()
             bindings.update(read_controls({}))
             walk_toggle.set(0)
-            walk_speed.set(50)
+            walk_speed.set(75)
             save_walk()
             show()
 
@@ -2783,9 +2784,9 @@ class Launcher(tk.Tk):
         the left stick goes while walking (walk_speed). Returns the variables and their save."""
         ini = read_ini()
         try:
-            speed = round(float(ini.get("walk_speed", "0.5")) * 100)
+            speed = round(float(ini.get("walk_speed", "0.75")) * 100)
         except ValueError:
-            speed = 50
+            speed = 75
         toggle = tk.IntVar(value=1 if ini.get("walk_toggle", "0") == "1" else 0)
         speed = tk.IntVar(value=min(max(speed, 10), 100))
         pending = []

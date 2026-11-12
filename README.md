@@ -161,14 +161,19 @@ The launcher sets the display, frame limit and folders, in nine languages; its D
 each optimization off, some of them while the game runs. The in-game menu (Insert, or R3+L2 on a
 controller) holds the graphics, controls and frame rate settings.
 
-**Without a DualShock 4:** the touchpad (backpack, crafting) is Tab / Backspace on the keyboard
-or Back/View on an Xbox-style controller. Shaking the controller is G on the keyboard or the
+**Keyboard and mouse:** WASD or the arrow keys move, the mouse turns the camera, right and left
+mouse buttons aim and fire, Space or Enter is Cross, C Circle, F Square, E Triangle, Left Shift
+L1, Tab R1, V L3, T R3, Esc or Backspace Options, 1 2 3 4 (and the mouse wheel) the d-pad. The
+launcher's Controls window and the in-game menu rebind them.
+
+**Without a DualShock 4:** the touchpad (backpack, crafting) is Caps Lock on the keyboard or
+Back/View on an Xbox-style controller. Shaking the controller is G on the keyboard or the
 Share/Capture button (`GOW3_KEY_MAP` / `GOW3_PAD_MAP` `shake=...` rebind it). The flashlight
 never flickers out by default, so it needs no shake: Celogamez's GoldHEN cheat "Flashlight Does
 Not Turn Off" (`TLOU_CHEATS=none` turns it off).
 
-**Walking on the keyboard:** Left Alt (`walk=...` in the key map) keeps the left stick, keys or
-controller, at 50% of a full push. The launcher's Controls window and the in-game menu choose
+**Walking on the keyboard:** Left Ctrl (`walk=...` in the key map) keeps the left stick, keys or
+controller, at 75% of a full push. The launcher's Controls window and the in-game menu choose
 whether the key is held or switches walking on and off, and how far the stick goes
 (`walk_toggle`, `walk_speed` in tlou.ini; `GOW3_WALK_TOGGLE`, `GOW3_WALK_SPEED`).
 
