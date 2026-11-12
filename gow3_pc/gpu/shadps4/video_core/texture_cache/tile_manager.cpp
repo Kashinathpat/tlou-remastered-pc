@@ -198,11 +198,15 @@ void TileManager::RecordTilingDispatch(vk::Pipeline pipeline, const vk::Descript
                                        const vk::DescriptorBufferInfo& linear,
                                        const vk::DescriptorBufferInfo& params, u32 dim_x) {
     // gow3 19 Oct 2026: large textures need more work groups
-    // than a dispatch may have on some GPUs (Vulkan guarantees 65535; RADV, Intel); they are
-    // dispatched in pieces, each starting at its first group (the shader sees the same
-    // gl_GlobalInvocationID as in one dispatch). Within the limit: one dispatch, as before.
+    // than a dispatch may have on some GPUs (Vulkan guarantees 65535; RADV, Intel). Within the
+    // limit: one dispatch, as before.
+    // gow3 3 Nov 2026: past it, a 2D grid in rows of kRowGroups (tiling.comp TILING_ROW_GROUPS)
+    // plus a last partial row. The pieces were dispatchBase along x, but the base group must stay
+    // below the limit too (VUID-vkCmdDispatchBase-baseGroupX-00421, found by validation on an
+    // Intel Arc B580). Base y is the row count, far below the 65535 every GPU allows.
     // GOW3_TEST_MAX_GROUPS_X=<n> (tests): a lower limit, to check the pieces on GPUs whose limit
     // no texture reaches (NVIDIA: 2^31 - 1).
+    static constexpr u32 kRowGroups = 32768;
     static const u32 test_max = [] {
         const char* env = std::getenv("GOW3_TEST_MAX_GROUPS_X");
         return env ? static_cast<u32>(std::strtoul(env, nullptr, 10)) : 0u;
@@ -246,8 +250,13 @@ void TileManager::RecordTilingDispatch(vk::Pipeline pipeline, const vk::Descript
         if (dim_x <= max_x) {
             cmdbuf.dispatch(dim_x, 1, 1);
         } else {
-            for (u32 first = 0; first < dim_x; first += max_x) {
-                cmdbuf.dispatchBase(first, 0, 0, std::min(max_x, dim_x - first), 1, 1);
+            const u32 rows = dim_x / kRowGroups;
+            const u32 rest = dim_x % kRowGroups;
+            if (rows) {
+                cmdbuf.dispatch(kRowGroups, rows, 1);
+            }
+            if (rest) {
+                cmdbuf.dispatchBase(0, rows, 0, rest, 1, 1);
             }
         }
     });

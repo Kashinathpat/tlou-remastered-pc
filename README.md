@@ -53,6 +53,25 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
     went through the same scene). The two-stage draw
     pipeline, blamed before, made the loss more frequent but was not its cause, and is on again
     ("Draw pipeline" in the launcher's Startup tab, `GOW3_DRAW_PIPE=0` turns it off).
+  - Intel graphics: an Arc B580 lost the Vulkan device at the logos or the main menu, and a UHD
+    630 (Intel driver 31.0.101.2145) showed a white or magenta menu and lost the device when a
+    save loaded. Found on the UHD 630 and changed for Intel's Windows driver only:
+    - the game's shaders ask for float rounding toward zero, which Intel's driver applies more
+      widely than NVIDIA's: the menu scene came out white. It is left out there (`GOW3_RTZ`);
+    - a 90-thread prefix sum (cs `cf1b98a8`) has workgroup barriers inside an `if` that differs
+      between threads; on the PS4 every wave still runs them, Intel's driver waits forever. Such
+      ifs now run for every thread, their LDS writes still following the condition
+      (`GOW3_UNIFORM_BARRIERS`);
+    - large textures were converted with more work groups per dispatch than Intel allows
+      (Vulkan validation error), now in pieces; depth/colour copies through a buffer (Intel has
+      no `VK_KHR_maintenance8`) copy every level instead of stopping the game;
+    - after the God of War III port (SpartanPort): vertex input dynamic state off
+      (`GOW3_VERTEX_INPUT_DYNAMIC=1` on), LDS barriers like NVIDIA's (`GOW3_LDS_BARRIERS=0`),
+      the compute subgroup size fixed (`GOW3_SUBGROUP_PIN=0`), and sample shading left out on
+      one-sample draws (`GOW3_SAMPLE_SHADING_1X=1`).
+    The UHD 630 then plays (about 10 FPS at 1080p; 3 replays of 5 minutes without a device loss,
+    where all 3 lost it before). The shader cache is rebuilt once on such a GPU. Three cloth shaders still have barriers in such ifs, inside loops (`106beafd`,
+    `e44070db`, `20c1dc43`); they did not hang it in the replays tried.
   - Soft shadows can look detached from objects, with a thin light outline around them and little
     darkening where they touch the ground, most visibly under vehicle wheels. The same spot on a
     PS4 has the contact darkening this port misses, so it is a port bug; the pass that draws it
@@ -72,7 +91,9 @@ that is not fixed yet (a workaround is under Known issues), and with rough edges
   [Sandy Bridge fork by vitolasanha](https://github.com/vitolasanha/tlou-remastered-pc-sandy-bridge-fix);
   `TLOU_ISA_REWRITE=auto|force|off`, default auto). The first start on such a CPU takes a little
   longer. Sandy Bridge's integrated graphics have no Vulkan, so a graphics card is needed there.
-- A graphics card or integrated GPU with Vulkan 1.3 and a current driver.
+- A graphics card or integrated GPU with Vulkan 1.3 and a current driver. Intel's integrated
+  graphics from the 6th generation (Skylake) on reach Vulkan 1.3 only with Intel's own current
+  driver; a laptop maker's older driver can stop at 1.2.
 - About 6 GB of free RAM for the game.
 
 ## Playing

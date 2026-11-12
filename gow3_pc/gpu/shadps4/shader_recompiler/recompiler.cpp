@@ -156,6 +156,11 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     Shader::Optimization::SsaRepairPass(program);
     Shader::Optimization::SsaRewritePass(program);
     Shader::Optimization::SharedMemoryBarrierPass(program, runtime_info, profile);
+    if (Shader::Optimization::UniformBarriersOn()) {
+        // Dead exec-mask ballots left in the ifs would make them look unsafe.
+        Shader::Optimization::DeadCodeEliminationPass(program);
+        Shader::Optimization::UniformBarrierPass(program);
+    }
     Shader::Optimization::DeadCodeEliminationPass(program);
     // gow3 10 Nov 2026 (from BilalReloaded's port 0.8.4): the game's LDS accesses checked like
     // the PS4, before the wave64 lowering adds its own scratch accesses (they go after the spare).

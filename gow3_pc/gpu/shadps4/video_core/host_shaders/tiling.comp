@@ -424,8 +424,14 @@ uint GetMipLevel(inout uint texel) {
     return mip;
 }
 
+// gow3 3 Nov 2026: past the device's work group limit, groups come in rows of this many
+// (TileManager::RecordTilingDispatch); a 1D dispatch has y = 0.
+const uint TILING_ROW_GROUPS = 32768;
+
 void main() {
-    uint texel = gl_GlobalInvocationID.x;
+    const uint index = (gl_WorkGroupID.y * TILING_ROW_GROUPS + gl_WorkGroupID.x) *
+                       gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    uint texel = index;
     uint mip = GetMipLevel(texel);
     uint pitch = info.mips[mip].pitch;
     uint height = info.mips[mip].height;
@@ -441,8 +447,8 @@ void main() {
 #endif
 
     if (IS_TILER != 0) {
-        tiled_data[tiled_offset / BYTES_PER_PIXEL] = linear_data[gl_GlobalInvocationID.x];
+        tiled_data[tiled_offset / BYTES_PER_PIXEL] = linear_data[index];
     } else {
-        linear_data[gl_GlobalInvocationID.x] = tiled_data[tiled_offset / BYTES_PER_PIXEL];
+        linear_data[index] = tiled_data[tiled_offset / BYTES_PER_PIXEL];
     }
 }

@@ -396,7 +396,19 @@ bool Instance::CreateDevice() {
     }
 
     boost::container::static_vector<const char*, 64> enabled_extensions;
+    // gow3 11 Nov 2026 (as SpartanPort's SPARTAN_VK_DISABLE_EXT): GOW3_VK_DISABLE_EXT=<names,...>
+    // treats these extensions as unavailable, to run a GPU that has them down another GPU's path
+    // (Intel lacks VK_KHR_maintenance8 and others). Required ones still stop the game.
+    static const std::string disabled_extensions = [] {
+        const char* env = std::getenv("GOW3_VK_DISABLE_EXT");
+        return env ? "," + std::string{env} + "," : std::string{};
+    }();
     const auto add_extension = [&](std::string_view extension) -> bool {
+        if (!disabled_extensions.empty() &&
+            disabled_extensions.find("," + std::string{extension} + ",") != std::string::npos) {
+            std::printf("GPU: extension %s turned off (GOW3_VK_DISABLE_EXT)\n", extension.data());
+            return false;
+        }
         const auto result =
             std::find_if(available_extensions.begin(), available_extensions.end(),
                          [&](const std::string& name) { return name == extension; });
@@ -507,7 +519,24 @@ bool Instance::CreateDevice() {
     }
     depth_clip_control = add_extension(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
     depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
-    vertex_input_dynamic_state = add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+    // gow3 11 Nov 2026 (from SpartanPort PR #1077 and Supermedo/uncharted_pc 0.3.3): Intel's
+    // Windows driver draws nothing with it (HD 630: black or blue 3D, SpartanPort #35, Uncharted
+    // #56). Pipelines then carry their vertex formats (the upstream path for drivers without
+    // the extension). GOW3_VERTEX_INPUT_DYNAMIC=1/0 forces it on or off.
+    {
+        const char* env = std::getenv("GOW3_VERTEX_INPUT_DYNAMIC");
+        const bool intel_windows = driver_id == vk::DriverId::eIntelProprietaryWindows;
+        const bool wanted = env ? env[0] == '1' : !intel_windows;
+        vertex_input_dynamic_state =
+            wanted && add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+        if (!vertex_input_dynamic_state) {
+            std::printf("GPU: vertex input dynamic state off (%s); pipelines carry their vertex "
+                        "formats\n",
+                        !wanted && env ? "GOW3_VERTEX_INPUT_DYNAMIC=0"
+                        : !wanted      ? "Intel's Windows driver; GOW3_VERTEX_INPUT_DYNAMIC=1: on"
+                                       : "not supported by this driver");
+        }
+    }
     list_restart = add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
     if (list_restart) {
         list_restart_features =

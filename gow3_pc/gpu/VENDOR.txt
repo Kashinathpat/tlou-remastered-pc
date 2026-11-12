@@ -30,3 +30,15 @@ After SuperMedo's 031baf5 / BilalReloaded 0.8.3: compute workgroups above 256 th
 Lane coarsening (11 Nov 2026, lane_coarsening.cpp, LaneTraversal in emit_spirv.cpp): a compute
   shader can run several guest invocations per host invocation; regions between barriers are
   emitted once per lane, barriers and the constructs holding them once (GOW3_LANE_COARSEN).
+After SpartanPort PR #1077 (Intel, 2026-10/11) and SuperMedo's 0.3.3: VK_EXT_vertex_input_dynamic_state
+  off on Intel's Windows driver (GOW3_VERTEX_INPUT_DYNAMIC; Profile::static_vertex_input, in the
+  former padding byte, keeps the caches of the two modes apart), LDS barriers on every GPU without
+  64-lane subgroups (GOW3_LDS_BARRIERS) and the subgroup size required when the driver offers a
+  range (Instance::RequiredSubgroupSize, GOW3_SUBGROUP_PIN; first written on intel-arc-tests).
+Intel UHD 630 findings (11 Nov 2026): float rounding toward zero left out on Intel's Windows driver
+  (profile, GOW3_RTZ); UniformBarrierPass (shared_memory_barrier_pass.cpp, GOW3_UNIFORM_BARRIERS):
+  barriers inside divergent ifs run for every thread, LDS writes predicated; sample shading off
+  on one-sample draws (GOW3_SAMPLE_SHADING_1X); f03223b's detiler grid and every-level buffer
+  copies reapplied (also in Fruc12's PR #83); diagnostics GOW3_FLOAT_CONTROLS, GOW3_VK_DISABLE_EXT
+  (after SpartanPort's SPARTAN_VK_DISABLE_EXT), GOW3_CHECKPOINT_FILE; frame captures written as
+  RGBA on BGRA swapchains.

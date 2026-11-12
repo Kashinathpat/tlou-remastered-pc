@@ -11,6 +11,7 @@
 #include <vector>
 #include "shader_recompiler/ir/breadth_first_search.h"
 #include "shader_recompiler/ir/ir_emitter.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/passes/resource_pass.h"
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
@@ -524,6 +525,156 @@ void SharedMemoryBarrierPass(IR::Program& program, const RuntimeInfo& runtime_in
             (!has_lds(node.data.block) || allowed(node.data.block))) {
             EmitBarrierInBlock(node.data.block);
         }
+    }
+}
+
+// gow3 11 Nov 2026: a GCN s_barrier is a scalar instruction: every wave of the group executes
+// it, whatever its exec mask. The recompiler puts it inside the structured if made from the
+// exec mask, so threads that leave the if skip the barrier, which Vulkan leaves undefined. NVIDIA
+// tolerated it; Intel's driver waits forever: a Hillis-Steele prefix sum (cs cf1b98a8, 90
+// threads, `if (offset <= lid) { read; barrier; write; barrier }` in a loop) lost the device on a
+// UHD 630 when a save loaded. Such an if now runs for every thread and only its LDS writes
+// follow the condition (a thread outside it writes back what the slot held). Only ifs whose body
+// is plain blocks, whose only side effects are LDS writes and barriers, that use no subgroup
+// operations and whose merge block has no phis are changed.
+void UniformBarrierPass(IR::Program& program) {
+    using Type = IR::AbstractSyntaxNode::Type;
+    using Op = IR::Opcode;
+    if (!UniformBarriersOn() || program.info.hw_stage != HwStage::Compute) {
+        return;
+    }
+    auto& list = program.syntax_list;
+    u32 changed = 0;
+    const auto note = [&](size_t at, const char* why) {
+        std::printf("GPU: compute shader %016llx: if #%zu around a workgroup barrier kept (%s)\n",
+                    static_cast<unsigned long long>(program.info.pgm_hash), at, why);
+    };
+    // Whether the nodes between an if and its end hold a barrier (any depth).
+    const auto holds_barrier = [&](size_t from, size_t to) {
+        for (size_t k = from; k < to; ++k) {
+            if (list[k].type != Type::Block) {
+                continue;
+            }
+            for (const IR::Inst& inst : list[k].data.block->Instructions()) {
+                if (inst.GetOpcode() == Op::Barrier) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i].type != Type::If) {
+            continue;
+        }
+        // The matching EndIf (ifs nest).
+        size_t end = i + 1;
+        bool plain = true;
+        for (u32 depth = 0; end < list.size(); ++end) {
+            if (list[end].type == Type::If) {
+                ++depth;
+            } else if (list[end].type == Type::EndIf) {
+                if (depth == 0) {
+                    break;
+                }
+                --depth;
+            }
+            plain &= list[end].type == Type::Block;
+        }
+        if (end == list.size() || !holds_barrier(i + 1, end)) {
+            continue;
+        }
+        if (!IsGroupNonUniform(list[i].data.if_node.cond)) {
+            continue;
+        }
+        if (!plain) {
+            note(i, "the if holds other control flow");
+            continue;
+        }
+        if (list[end].data.end_if.merge != list[i].data.if_node.merge) {
+            note(i, "unexpected merge");
+            continue;
+        }
+        bool has_barrier = false;
+        bool safe = true;
+        const char* blocker = nullptr;
+        for (size_t k = i + 1; k < end && safe; ++k) {
+            for (const IR::Inst& inst : list[k].data.block->Instructions()) {
+                const bool was_safe = safe;
+                switch (inst.GetOpcode()) {
+                case Op::Barrier:
+                    has_barrier = true;
+                    break;
+                case Op::WriteSharedU16:
+                case Op::WriteSharedU32:
+                case Op::WriteSharedU64:
+                    safe &= !inst.Flags<bool>(); // not GDS
+                    break;
+                case Op::Ballot:
+                case Op::BallotFindLsb:
+                case Op::InverseBallot:
+                case Op::ReadFirstLane:
+                case Op::ReadLane:
+                case Op::WriteLane:
+                case Op::QuadBroadcast:
+                case Op::GroupAny:
+                case Op::MaskedBitCount32:
+                case Op::GetExec:
+                case Op::LaneId:
+                    safe = false;
+                    break;
+                default:
+                    safe &= !inst.MayHaveSideEffects() || inst.GetOpcode() == Op::ConditionRef;
+                    break;
+                }
+                if (was_safe && !safe) {
+                    blocker = IR::NameOf(inst.GetOpcode()).data();
+                }
+            }
+        }
+        if (!safe) {
+            note(i, blocker ? blocker : "unsafe instruction");
+            continue;
+        }
+        const IR::Block* merge = list[i].data.if_node.merge;
+        if (!std::ranges::none_of(merge->Instructions(), IR::IsPhi)) {
+            note(i, "phis in the merge block");
+            continue;
+        }
+        if (!has_barrier) {
+            continue;
+        }
+        const IR::U1 cond = list[i].data.if_node.cond;
+        for (size_t k = i + 1; k < end; ++k) {
+            IR::Block* block = list[k].data.block;
+            for (IR::Inst& inst : block->Instructions()) {
+                int bits = 0;
+                switch (inst.GetOpcode()) {
+                case Op::WriteSharedU16:
+                    bits = 16;
+                    break;
+                case Op::WriteSharedU32:
+                    bits = 32;
+                    break;
+                case Op::WriteSharedU64:
+                    bits = 64;
+                    break;
+                default:
+                    continue;
+                }
+                IR::IREmitter ir{*block, IR::Block::InstructionList::s_iterator_to(inst)};
+                const IR::U32 offset{inst.Arg(0)};
+                const IR::Value old = ir.LoadShared(bits, false, offset);
+                inst.SetArg(1, ir.Select(cond, inst.Arg(1), old));
+            }
+        }
+        list[i].data.if_node.cond = IR::U1{IR::Value{true}};
+        ++changed;
+    }
+    if (changed) {
+        std::printf("GPU: compute shader %016llx: %u if(s) around workgroup barriers run for every "
+                    "thread (GOW3_UNIFORM_BARRIERS)\n",
+                    static_cast<unsigned long long>(program.info.pgm_hash), changed);
     }
 }
 

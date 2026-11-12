@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <string>
 #include <cstdlib>
 #include <map>
 #include <mutex>
@@ -541,13 +542,18 @@ void DumpGpuCheckpoints(const Instance& instance) {
     if (!instance.HasGpuCheckpoints()) return;
     const auto checkpoints=instance.GetGraphicsQueue().getCheckpointDataNV();
     const u64 recorded=checkpoint_index.load();
+    // gow3 11 Nov 2026: built whole and written at once (other threads' lines cut into it), and
+    // also to GOW3_CHECKPOINT_FILE when set.
+    std::string report;
+    char line[256];
 #ifdef _WIN32
-    std::fprintf(stderr,"GPU checkpoint records: %zu; markers recorded: %llu; image base %p\n",
-                 checkpoints.size(),(unsigned long long)recorded,static_cast<void*>(&__ImageBase));
+    std::snprintf(line,sizeof(line),"GPU checkpoint records: %zu; markers recorded: %llu; image base %p\n",
+                  checkpoints.size(),(unsigned long long)recorded,static_cast<void*>(&__ImageBase));
 #else
-    std::fprintf(stderr,"GPU checkpoint records: %zu; markers recorded: %llu\n",checkpoints.size(),
-                 (unsigned long long)recorded);
+    std::snprintf(line,sizeof(line),"GPU checkpoint records: %zu; markers recorded: %llu\n",
+                  checkpoints.size(),(unsigned long long)recorded);
 #endif
+    report+=line;
     u64 last=0;
     for (const auto& checkpoint:checkpoints) {
         auto* marker=static_cast<GpuCheckpoint*>(checkpoint.pCheckpointMarker);
@@ -555,16 +561,27 @@ void DumpGpuCheckpoints(const Instance& instance) {
         if (address<reinterpret_cast<uintptr_t>(gpu_checkpoints.data()) ||
             address>=reinterpret_cast<uintptr_t>(gpu_checkpoints.data()+gpu_checkpoints.size())) continue;
         last=std::max(last,marker->sequence);
-        std::fprintf(stderr,"GPU checkpoint: stage=%s sequence=%llu operation=%s shaders=%016llx,%016llx\n",
-                     vk::to_string(checkpoint.stage).c_str(),(unsigned long long)marker->sequence,
-                     marker->operation,(unsigned long long)marker->first,(unsigned long long)marker->second);
+        std::snprintf(line,sizeof(line),"GPU checkpoint: stage=%s sequence=%llu operation=%s shaders=%016llx,%016llx\n",
+                      vk::to_string(checkpoint.stage).c_str(),(unsigned long long)marker->sequence,
+                      marker->operation,(unsigned long long)marker->first,(unsigned long long)marker->second);
+        report+=line;
     }
     // Operations recorded after the newest marker the GPU reached; the fault is in this range.
     for (u64 sequence=last>24 ? last-24 : 0; sequence<recorded && sequence<=last+40; ++sequence) {
         const auto& marker=gpu_checkpoints[sequence%gpu_checkpoints.size()];
-        std::fprintf(stderr,"GPU pending: sequence=%llu operation=%s values=%016llx,%016llx\n",
-                     (unsigned long long)marker.sequence,marker.operation,
-                     (unsigned long long)marker.first,(unsigned long long)marker.second);
+        std::snprintf(line,sizeof(line),"GPU pending: sequence=%llu operation=%s values=%016llx,%016llx\n",
+                      (unsigned long long)marker.sequence,marker.operation,
+                      (unsigned long long)marker.first,(unsigned long long)marker.second);
+        report+=line;
+    }
+    std::fflush(stdout);
+    std::fwrite(report.data(),1,report.size(),stderr);
+    std::fflush(stderr);
+    if (const char* path=std::getenv("GOW3_CHECKPOINT_FILE")) {
+        if (std::FILE* file=std::fopen(path,"wb")) {
+            std::fwrite(report.data(),1,report.size(),file);
+            std::fclose(file);
+        }
     }
 }
 void Scheduler::ReportCheckpoints() const { DumpGpuCheckpoints(instance); }

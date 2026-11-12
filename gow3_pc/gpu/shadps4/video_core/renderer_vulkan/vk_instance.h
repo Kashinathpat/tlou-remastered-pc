@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <span>
 #include <unordered_map>
 
@@ -285,6 +286,29 @@ public:
     /// Returns true if the subgroup size can be set to match guest subgroup size
     bool IsSubgroupSize64Supported() const {
         return vk13_features.subgroupSizeControl && vk13_props.maxSubgroupSize >= 64;
+    }
+
+    /// gow3 11 Nov 2026 (from the intel-arc-tests branch; SpartanPort PR #1077 does the same):
+    /// the subgroup size a shader stage must be compiled for, 0 for the driver's choice. Without
+    /// 64, the recompiler lowers wave64 code for SubgroupSize(), but a driver with a range of
+    /// sizes (Intel: 8 or 16 to 32) picks one per shader, and a narrower build breaks that
+    /// lowering. GOW3_SUBGROUP_PIN=0: the driver's choice again.
+    u32 RequiredSubgroupSize(vk::ShaderStageFlags stage) const {
+        if (IsSubgroupSize64Supported()) {
+            return 64;
+        }
+        static const bool pin = [] {
+            const char* env = std::getenv("GOW3_SUBGROUP_PIN");
+            return !env || env[0] != '0';
+        }();
+        if (!pin || !vk13_features.subgroupSizeControl ||
+            vk13_props.minSubgroupSize == vk13_props.maxSubgroupSize ||
+            !(vk13_props.requiredSubgroupSizeStages & stage) ||
+            SubgroupSize() < vk13_props.minSubgroupSize ||
+            SubgroupSize() > vk13_props.maxSubgroupSize) {
+            return 0;
+        }
+        return SubgroupSize();
     }
 
     /// Returns true when VK_KHR_workgroup_memory_explicit_layout is supported.

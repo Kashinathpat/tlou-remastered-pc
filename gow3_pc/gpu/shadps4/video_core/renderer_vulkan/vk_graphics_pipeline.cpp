@@ -183,6 +183,19 @@ GraphicsPipeline::GraphicsPipeline(
                 fs_info.addr_flags.persp_sample_ena || fs_info.addr_flags.linear_sample_ena,
         };
     }
+    // gow3 11 Nov 2026: with one sample, sample shading is per-pixel shading, so it changes
+    // nothing; Intel's Windows driver lost the device on the shadow passes that ask for it (empty
+    // ps fa5be240, alpha-tested ps e4969822; UHD 630 and Arc B580). Also for pipelines read from
+    // the cache. GOW3_SAMPLE_SHADING_1X=1 keeps it, =0 drops it on every driver.
+    static const bool drop_1x_sample_shading = [&] {
+        const char* env = std::getenv("GOW3_SAMPLE_SHADING_1X");
+        return env ? env[0] == '0'
+                   : instance.GetDriverID() == vk::DriverId::eIntelProprietaryWindows;
+    }();
+    if (drop_1x_sample_shading &&
+        sdata.multisampling.rasterizationSamples == vk::SampleCountFlagBits::e1) {
+        sdata.multisampling.sampleShadingEnable = false;
+    }
 
     const vk::PipelineViewportDepthClipControlCreateInfoEXT clip_control = {
         .negativeOneToOne = key.clip_space == AmdGpu::ClipSpace::MinusWToW,
@@ -298,11 +311,13 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
 
+    // gow3: one size for every stage (Instance::RequiredSubgroupSize), each stage only if allowed.
+    const u32 subgroup_size = instance.RequiredSubgroupSize(vk::ShaderStageFlagBits::eAllGraphics);
     const vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size_ci = {
-        .requiredSubgroupSize = 64,
+        .requiredSubgroupSize = subgroup_size,
     };
     for (auto& stage : shader_stages) {
-        stage.pNext = instance.IsSubgroupSize64Supported() ? &subgroup_size_ci : nullptr;
+        stage.pNext = instance.RequiredSubgroupSize(stage.stage) ? &subgroup_size_ci : nullptr;
     }
 
     const auto depth_format =

@@ -1156,10 +1156,23 @@ void SetupInfNanPreserveMode(EmitContext& ctx, const Profile& profile,
 
 void SetupFloatMode(EmitContext& ctx, const Profile& profile, const RuntimeInfo& runtime_info,
                     Id main_func) {
+    // gow3 11 Nov 2026 (Intel diagnostics): GOW3_FLOAT_CONTROLS=<letters> keeps only these float
+    // modes: d = denorm, r = rounding, n = signed zero/inf/nan; "0" none. Cached shaders keep
+    // the modes they were built with: use an empty cache folder when changing it.
+    static const std::string kept = [] {
+        const char* env = std::getenv("GOW3_FLOAT_CONTROLS");
+        return env ? std::string{env} : std::string{"drn"};
+    }();
     ctx.AddExtension("SPV_KHR_float_controls");
-    SetupDenormFlushMode(ctx, profile, runtime_info, main_func);
-    SetupRoundingMode(ctx, profile, runtime_info, main_func);
-    SetupInfNanPreserveMode(ctx, profile, runtime_info, main_func);
+    if (kept.find('d') != std::string::npos) {
+        SetupDenormFlushMode(ctx, profile, runtime_info, main_func);
+    }
+    if (kept.find('r') != std::string::npos) {
+        SetupRoundingMode(ctx, profile, runtime_info, main_func);
+    }
+    if (kept.find('n') != std::string::npos) {
+        SetupInfNanPreserveMode(ctx, profile, runtime_info, main_func);
+    }
 }
 
 void PatchPhiNodes(const IR::Program& program, EmitContext& ctx) {

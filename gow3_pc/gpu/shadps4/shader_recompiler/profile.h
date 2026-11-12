@@ -54,6 +54,12 @@ struct Profile {
     bool needs_unorm_fixup{};
     bool needs_clip_distance_emulation{};
     bool supports_shader_stencil_export{};
+    /// gow3 11 Nov 2026: pipelines carry their vertex formats (no
+    /// VK_EXT_vertex_input_dynamic_state: Intel's Windows driver). Not read by the recompiler;
+    /// here so a cache of the other mode is not reused (its pipeline keys and vertex inputs
+    /// differ). It takes what was the struct's trailing padding byte: caches written before it
+    /// read false and stay valid.
+    bool static_vertex_input{};
 
     bool operator==(const Profile&) const = default;
 };

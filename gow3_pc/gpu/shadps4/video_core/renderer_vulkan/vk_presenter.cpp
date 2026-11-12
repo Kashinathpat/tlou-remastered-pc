@@ -367,7 +367,8 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
                     vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
                     int index, u32 pixel_bytes = 4,
                     vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eColor,
-                    u32 block_width = 1, u32 block_height = 1, u32 layer = 0, u32 level = 0) {
+                    u32 block_width = 1, u32 block_height = 1, u32 layer = 0, u32 level = 0,
+                    bool swap_red_blue = false) {
     const VkBufferCreateInfo buffer_ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                        .size = VkDeviceSize((w + block_width - 1) / block_width) *
                                                ((h + block_height - 1) / block_height) * pixel_bytes,
@@ -390,8 +391,17 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     std::snprintf(path, sizeof(path), "%s/%s_%03d_%ux%u.raw", dir && *dir ? dir : "out/dump", name,
                   index, w, h);
     scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation, info,
-                                      size = buffer_ci.size, file = std::string{path}] {
+                                      size = buffer_ci.size, file = std::string{path},
+                                      swap_red_blue] {
         vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
+        // gow3 11 Nov 2026: written as RGBA whatever the image holds (Intel's swapchain is BGRA:
+        // its frame captures showed blue skin).
+        if (swap_red_blue) {
+            auto* pixels = static_cast<u8*>(info.pMappedData);
+            for (VkDeviceSize i = 0; i + 3 < size; i += 4) {
+                std::swap(pixels[i], pixels[i + 2]);
+            }
+        }
         if (FILE* f = std::fopen(file.c_str(), "wb")) {
             std::fwrite(info.pMappedData, 1, size, f);
             std::fclose(f);
@@ -650,7 +660,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                                       .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
         cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &done});
         DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
-                frame->width, frame->height, "output", frame_dump_index);
+                frame->width, frame->height, "output", frame_dump_index, 4,
+                vk::ImageAspectFlagBits::eColor, 1, 1, 0, 0,
+                swapchain.GetSurfaceFormat().format == vk::Format::eB8G8R8A8Unorm ||
+                    swapchain.GetSurfaceFormat().format == vk::Format::eB8G8R8A8Srgb);
         ++frame_dump_index;
     }
 

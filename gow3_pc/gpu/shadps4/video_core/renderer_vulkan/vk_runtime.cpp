@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <boost/container/small_vector.hpp>
+#include "common/alignment.h"
 #include "gow3_toggles.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -547,30 +548,50 @@ void Runtime::CopyImage(VideoCore::Image* src, VideoCore::Image* dst) {
 
 void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                                   const VideoCore::Buffer* buffer, u64 offset) {
+    // gow3 3 Nov 2026: every level both images have, and the layers both have. Without
+    // VK_KHR_maintenance8 (the Intel Arc B580) every depth and color copy comes here, and one
+    // with mips stopped the game after the first cutscene (the assert allowed one level of
+    // equal layers). Levels beyond the copy buffer's 128 MiB are left out.
+    static constexpr u64 CopyBufferSize = 128_MB;
     const u32 num_mips = std::min(src->info.resources.levels, dst->info.resources.levels);
     const u32 num_layers = std::min(src->info.resources.layers, dst->info.resources.layers);
-    ASSERT(src->info.resources.layers == dst->info.resources.layers && num_mips == 1);
 
     SetBackingSamples(dst, dst->info.num_samples, false);
     SetBackingSamples(src, src->info.num_samples);
 
-    vk::BufferImageCopy buffer_copy = {
-        .bufferOffset = offset,
-        .bufferRowLength = 0,
-        .bufferImageHeight = 0,
-        .imageSubresource{
-            .aspectMask = src->aspect_mask & ~vk::ImageAspectFlagBits::eStencil,
-            .mipLevel = 0u,
-            .baseArrayLayer = 0,
-            .layerCount = num_layers,
-        },
-        .imageOffset = {0, 0, 0},
-        // gow3 24 Oct 2026: what both images have (CopyImage).
-        .imageExtent = {std::min(src->info.size.width, dst->info.size.width),
-                        std::min(src->info.size.height, dst->info.size.height),
-                        std::min(src->info.size.depth, dst->info.size.depth)},
-    };
-    const auto copy_size = BufferImageCopySize(buffer_copy, src->info.pixel_format);
+    boost::container::small_vector<vk::BufferImageCopy, 16> download_copies;
+    boost::container::small_vector<vk::BufferImageCopy, 16> upload_copies;
+    u64 copy_size = 0;
+    for (u32 mip = 0; mip < num_mips; ++mip) {
+        vk::BufferImageCopy buffer_copy = {
+            .bufferOffset = offset + copy_size,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = src->aspect_mask & ~vk::ImageAspectFlagBits::eStencil,
+                .mipLevel = mip,
+                .baseArrayLayer = 0,
+                .layerCount = num_layers,
+            },
+            .imageOffset = {0, 0, 0},
+            // gow3 24 Oct 2026: what both images have (CopyImage).
+            .imageExtent = {std::max(std::min(src->info.size.width, dst->info.size.width) >> mip, 1u),
+                            std::max(std::min(src->info.size.height, dst->info.size.height) >> mip, 1u),
+                            std::max(std::min(src->info.size.depth, dst->info.size.depth) >> mip, 1u)},
+        };
+        const u64 size = Common::AlignUp(BufferImageCopySize(buffer_copy, src->info.pixel_format), 16);
+        if (copy_size + size > CopyBufferSize) {
+            break;
+        }
+        download_copies.push_back(buffer_copy);
+        buffer_copy.imageSubresource.aspectMask =
+            dst->aspect_mask & ~vk::ImageAspectFlagBits::eStencil;
+        upload_copies.push_back(buffer_copy);
+        copy_size += size;
+    }
+    if (download_copies.empty()) {
+        return;
+    }
 
     scheduler.EndRendering();
 
@@ -584,13 +605,11 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
         FlushBarriers();
     }
 
-    const auto download_copy = buffer_copy;
-    buffer_copy.imageSubresource.aspectMask = dst->aspect_mask & ~vk::ImageAspectFlagBits::eStencil;
     scheduler.Record([src_image = src->GetImage(), dst_image = dst->GetImage(),
-                      handle = buffer->Handle(), download_copy,
-                      upload_copy = buffer_copy](vk::CommandBuffer cmdbuf) {
+                      handle = buffer->Handle(), download_copies,
+                      upload_copies](vk::CommandBuffer cmdbuf) {
         cmdbuf.copyImageToBuffer(src_image, vk::ImageLayout::eTransferSrcOptimal, handle,
-                                 download_copy);
+                                 download_copies);
         const vk::MemoryBarrier2 post_copy_barrier = {
             .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
             .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -603,7 +622,7 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
             .pMemoryBarriers = &post_copy_barrier,
         });
         cmdbuf.copyBufferToImage(handle, dst_image, vk::ImageLayout::eTransferDstOptimal,
-                                 upload_copy);
+                                 upload_copies);
     });
 
     dst->flags |= (src->flags & VideoCore::ImageFlagBits::GpuModified);

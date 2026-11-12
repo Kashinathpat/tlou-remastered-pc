@@ -368,6 +368,17 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     // gow3 11 Nov 2026: shaders compiled with lanes on this GPU (lane_coarsening.cpp).
     Shader::Optimization::SetLaneCoarseningGpu(instance.GetVendorID(), instance.GetDeviceID());
     const auto& vk12_props = instance.GetVk12Properties();
+    // gow3 11 Nov 2026: the game's shaders ask for float rounding toward zero. Intel's Windows
+    // driver applies it to more than NVIDIA's does: on a UHD 630 the menu scene came out white or
+    // with magenta textures, and with it left out it matched the GTX 1050 Ti (only denorm
+    // flushing left out was still wrong). Rounding toward zero is not used there; GOW3_RTZ=1
+    // uses it, =0 leaves it out on every GPU.
+    const bool rtz_allowed = [&] {
+        if (const char* env = std::getenv("GOW3_RTZ")) {
+            return env[0] == '1';
+        }
+        return instance.GetDriverID() != vk::DriverId::eIntelProprietaryWindows;
+    }();
     profile = Shader::Profile{
         .max_viewport_width = instance.GetMaxViewportWidth(),
         .max_viewport_height = instance.GetMaxViewportHeight(),
@@ -386,13 +397,13 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
             vk12_props.roundingModeIndependence != vk::ShaderFloatControlsIndependence::eNone,
         .support_fp16_denorm_preserve = bool(vk12_props.shaderDenormPreserveFloat16),
         .support_fp16_denorm_flush = bool(vk12_props.shaderDenormFlushToZeroFloat16),
-        .support_fp16_round_to_zero = bool(vk12_props.shaderRoundingModeRTZFloat16),
+        .support_fp16_round_to_zero = rtz_allowed && bool(vk12_props.shaderRoundingModeRTZFloat16),
         .support_fp32_denorm_preserve = bool(vk12_props.shaderDenormPreserveFloat32),
         .support_fp32_denorm_flush = bool(vk12_props.shaderDenormFlushToZeroFloat32),
-        .support_fp32_round_to_zero = bool(vk12_props.shaderRoundingModeRTZFloat32),
+        .support_fp32_round_to_zero = rtz_allowed && bool(vk12_props.shaderRoundingModeRTZFloat32),
         .support_fp64_denorm_preserve = bool(vk12_props.shaderDenormPreserveFloat64),
         .support_fp64_denorm_flush = bool(vk12_props.shaderDenormFlushToZeroFloat64),
-        .support_fp64_round_to_zero = bool(vk12_props.shaderRoundingModeRTZFloat64),
+        .support_fp64_round_to_zero = rtz_allowed && bool(vk12_props.shaderRoundingModeRTZFloat64),
         .support_fp16_signed_zero_inf_nan_preserve =
             bool(vk12_props.shaderSignedZeroInfNanPreserveFloat16),
         .support_fp32_signed_zero_inf_nan_preserve =
@@ -423,15 +434,35 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
             return !instance.IsFragmentShaderBarycentricSupported() &&
                    instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
         }(),
-        .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
-                              instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
+        // gow3 11 Nov 2026 (as SpartanPort PR #1077): every GPU that cannot run 64-lane waves,
+        // not only NVIDIA. GCN code passes data through LDS inside a wave without a barrier;
+        // Intel runs it in 32-lane (or narrower) pieces that race. GOW3_LDS_BARRIERS=0/1 forces
+        // it off or on.
+        .needs_lds_barriers = [&] {
+            if (const char* env = std::getenv("GOW3_LDS_BARRIERS")) {
+                return env[0] == '1';
+            }
+            return instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
+                   instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp ||
+                   (!instance.IsSubgroupSize64Supported() && instance.SubgroupSize() < 64);
+        }(),
         .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
+        .static_vertex_input = !instance_.IsVertexInputDynamicState(),
     };
+    static_assert(sizeof(Shader::Profile) == 64, "the stored cache profile changed size");
     // gow3 10 Nov 2026 (WorkgroupSplit, shader_recompiler/runtime_info.h): before any shader is
     // compiled or loaded. GOW3_WORKGROUP_SPLIT=0: off, =1: on for every driver.
+    // gow3 11 Nov 2026 (UniformBarrierPass): on Intel's Windows driver; GOW3_UNIFORM_BARRIERS=1/0
+    // forces it. Cached shaders keep how they were built: on Intel the profile (GOW3_RTZ) keeps
+    // its cache apart; use an empty cache folder when changing it.
+    {
+        const char* env = std::getenv("GOW3_UNIFORM_BARRIERS");
+        Shader::Optimization::UniformBarriersOn() =
+            env ? env[0] == '1' : instance.GetDriverID() == vk::DriverId::eIntelProprietaryWindows;
+    }
     {
         const char* env = std::getenv("GOW3_WORKGROUP_SPLIT");
         const bool nvidia = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
