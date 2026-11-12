@@ -133,6 +133,33 @@ CHEATS = {
 # spinning (pause at 0xC87D65). The flag is treated as on in the worker loop, its re-check before
 # waiting and the submit path, as in the Uncharted ports of the same engine.
 JOB_SLEEP = [(0xC87D63, "7304", "EB04"), (0xC87D96, "741B", "9090"), (0xC873E1, "742D", "9090")]
+
+
+def aim_assist_off_patch():
+    """The launcher's Controls > Aim assist off (aim_assist=0 in tlou.ini, TLOU_AIM_ASSIST=0).
+
+    12 Nov 2026: the game's aim settings (DC module player-aim-settings, one set per difficulty:
+    a list of named settings - default, shotgun, bow, scoped, rifle-scoped, rebar-aim, ... - that
+    eboot 1.11 0x4b3b10 searches by name; 0x4b3c80 copies the one found into the player's table at
+    0x15e1c60) include Naughty Dog's own "no-aim-assist": the default setting with its four assist
+    lists emptied (counts at +0x58, +0x68, +0x78 and +0x88: zones with three curves and a weight
+    each, the rest identical). Off, every setting found has those counts set to 0 the same way,
+    so each weapon keeps its own speeds, zoom and curves without the assist. The search's match
+    (cmp [rax+8], ebx; je found) jumps to three chained caves in the padding after short
+    functions (cmp/jne back; xor ecx, then the four counts; then the found path).
+    """
+    import struct
+    rel = lambda after, target: struct.pack("<i", target - after).hex().upper()
+    nops = lambda count: "90" * count
+    site, loop, found = 0x4B3C20, 0x4B3C25, 0x4B3C2D
+    cave1, cave2, cave3 = 0x4B3FE1, 0x4B3FF1, 0x4B4001
+    code1 = "395808" + "0F85" + rel(cave1 + 9, loop) + "E9" + rel(cave1 + 14, cave2)
+    code2 = "31C9" + "894858" + "894868" + "E9" + rel(cave2 + 13, cave3)
+    code3 = "894878" + "898888000000" + "E9" + rel(cave3 + 14, found)
+    return [(site, "3958087408", "E9" + rel(site + 5, cave1)),
+            (cave1, nops(15), code1 + nops(15 - len(code1) // 2)),
+            (cave2, nops(15), code2 + nops(15 - len(code2) // 2)),
+            (cave3, nops(15), code3 + nops(15 - len(code3) // 2))]
 # The PS4 Pro's shadows (TLOU_PRO_SHADOWS=0 keeps the base PS4's). On a Pro (sceKernelIsNeoMode, the
 # engine's IsNeo at 0xB28670) the game sets the render options' (0x181A770) "Neo Enhancements" mode
 # (+0x7FC: resolution, framerate, quality), which picks the resolution (+0xF0), checkerboard (+0x7D0)
@@ -532,6 +559,10 @@ def main():
         patches["job-sleep"] = JOB_SLEEP
     if os.environ.get("TLOU_PRO_SHADOWS") != "0":
         patches["pro-shadows"] = PRO_SHADOWS
+    # The launcher's Controls > Aim assist (aim_assist in tlou.ini; TLOU_AIM_ASSIST=0/1 wins).
+    aim_assist = os.environ.get("TLOU_AIM_ASSIST") or ini_value(Path(env["GOW3_CONFIG"]), "aim_assist")
+    if (aim_assist or "1").strip() == "0":
+        patches["aim-assist-off"] = aim_assist_off_patch()
     chosen = os.environ.get("TLOU_RESOLUTION") or ini_value(Path(env["GOW3_CONFIG"]), "output_res")
     size = parse_size(chosen) or RENDER_DEFAULT
     if chosen and not parse_size(chosen):

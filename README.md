@@ -161,6 +161,12 @@ whether the key is held or switches walking on and off, and how far the stick go
 following the controller and the bound keys) and the in-game menu turn the controller's vibration
 off (`vibration=0` in tlou.ini; `GOW3_VIBRATION=0`).
 
+**Aim assist:** the launcher's Controls window (Controller and Mouse tabs) turns it off
+(`aim_assist=0` in tlou.ini; `TLOU_AIM_ASSIST=0`), from the next start of the game. Off, every aim
+setting the game loads (per weapon and difficulty) gets its four assist lists emptied, as in the
+game's own `no-aim-assist` setting: the crosshair is not helped to follow enemies, and each weapon
+keeps its speeds, zoom and stick curves.
+
 ## Building
 
 From an MSYS2 **CLANG64** shell:

@@ -974,6 +974,20 @@ CONTROL_TEXT = {
     'Vibração': ('Vibration', 'Vibración', 'Vibration', 'Vibration', 'Vibrazione', 'Wibracje', 'Вибрация', '振動'),
     'Testar vibração': ('Test vibration', 'Probar vibración', 'Tester la vibration', 'Vibration testen',
                         'Prova vibrazione', 'Testuj wibracje', 'Проверить вибрацию', '振動をテスト'),
+    'Mira': ('Aiming', 'Puntería', 'Visée', 'Zielen', 'Mira', 'Celowanie', 'Прицеливание', '照準'),
+    'Assistência de mira': ('Aim assist', 'Asistencia de apuntado', 'Aide à la visée', 'Zielhilfe',
+                            'Assistenza alla mira', 'Wspomaganie celowania', 'Помощь в прицеливании',
+                            'エイムアシスト'),
+    'Desligada: o jogo não ajuda a mira a seguir os inimigos. Vale na próxima vez que o jogo abrir.': (
+        'Off: the game does not help the crosshair follow enemies. Applies the next time the game starts.',
+        'Desactivada: el juego no ayuda a la mira a seguir a los enemigos. Se aplica la próxima vez que se abra '
+        'el juego.',
+        "Désactivée : le jeu n'aide pas le réticule à suivre les ennemis. S'applique au prochain lancement du jeu.",
+        'Aus: Das Spiel hilft dem Fadenkreuz nicht, Gegnern zu folgen. Gilt ab dem nächsten Spielstart.',
+        'Disattivata: il gioco non aiuta il mirino a seguire i nemici. Vale dal prossimo avvio del gioco.',
+        'Wyłączone: gra nie pomaga celownikowi podążać za wrogami. Działa od następnego uruchomienia gry.',
+        'Выкл.: игра не помогает прицелу следовать за врагами. Действует со следующего запуска игры.',
+        'オフ: 照準が敵を追うのをゲームが補助しません。次回のゲーム起動時から有効です。'),
 }
 
 # The art is the player's own dump's (sce_sys), read at run time: no game file in the repository.
@@ -2291,12 +2305,18 @@ class Launcher(tk.Tk):
             return
         self.controls_window = window = tk.Toplevel(self, bg=BG)
         window.title(self.t("controls"))
-        window.geometry(f"780x640+{self.winfo_rootx() + 40}+{self.winfo_rooty() + 20}")
+        window.geometry(f"780x720+{self.winfo_rootx() + 40}+{self.winfo_rooty() + 20}")
         tabs = ttk.Notebook(window)
         tabs.pack(fill="both", expand=True, padx=14, pady=14)
+        # Aim assist (aim_assist in tlou.ini; tools/probe_tlou.py patches the game's aim settings
+        # at start): one switch, shown in the Controller and Mouse tabs.
+        self.aim_assist = tk.BooleanVar(value=read_ini().get("aim_assist", "1") != "0")
         self.pad_tab(window, tabs)
         self.keys_tab(window, tabs)
         self.mouse_tab(tabs)
+
+    def save_aim_assist(self):
+        write_ini({"aim_assist": int(self.aim_assist.get())})
 
     def pad_tab(self, window, tabs):
         """A drawn controller that follows the controller (SDL3, while the tab is shown) and the bound keys
@@ -2340,6 +2360,19 @@ class Launcher(tk.Tk):
         tk.Label(row, text=self.debug_text("Vale na próxima vez que o jogo abrir."), bg=BG, fg=MUTED,
                  font=("Segoe UI", 9)).pack(side="left", padx=(14, 0))
         tester.config(state="normal" if vibration.get() else "disabled")
+
+        aim_card = tk.Frame(outer, bg=BG, highlightthickness=1, highlightbackground="#262626")
+        aim_card.pack(fill="x", padx=10, pady=(10, 0))
+        tk.Label(aim_card, text=self.debug_text("Mira").upper(), bg=BG, fg=ACCENT,
+                 font=("Segoe UI Semibold", 9)).pack(anchor="w", padx=14, pady=(10, 2))
+        tk.Checkbutton(aim_card, text=self.debug_text("Assistência de mira"), variable=self.aim_assist,
+                       command=self.save_aim_assist, bg=BG, fg=TEXT, selectcolor=PANEL, activebackground=BG,
+                       activeforeground=TEXT, font=("Segoe UI", 10), bd=0, highlightthickness=0,
+                       takefocus=0).pack(anchor="w", padx=12)
+        tk.Label(aim_card, text=self.debug_text("Desligada: o jogo não ajuda a mira a seguir os inimigos. "
+                                                "Vale na próxima vez que o jogo abrir."),
+                 bg=BG, fg=MUTED, font=("Segoe UI", 9), wraplength=560, justify="left").pack(anchor="w", padx=14,
+                                                                                              pady=(0, 10))
 
         def shown():
             return outer.winfo_exists() and tabs.select() == str(outer)
@@ -2461,6 +2494,8 @@ class Launcher(tk.Tk):
         def reset():
             vibration.set(True)
             save()
+            self.aim_assist.set(True)
+            self.save_aim_assist()
 
         self.reset_link(outer, reset)
         window.pad_view, window.pad_state = view, state   # (tests)
@@ -2632,6 +2667,11 @@ class Launcher(tk.Tk):
         tk.Frame(body, bg=PANEL, height=8).pack()
         self.option(body, "Inverter eixo vertical", invert, save)
         self.option(body, "Inverter eixo horizontal", invert_x, save)
+        tk.Frame(body, bg=PANEL, height=8).pack()
+        self.option(body, "Assistência de mira", self.aim_assist, self.save_aim_assist)
+        tk.Label(body, text=self.debug_text("Desligada: o jogo não ajuda a mira a seguir os inimigos. "
+                                            "Vale na próxima vez que o jogo abrir."),
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 9), wraplength=520, justify="left").pack(anchor="w", padx=(22, 0))
 
         def reset():
             enabled.set(True)
