@@ -104,7 +104,18 @@ int main(void) {
     assert(trophy_unlock_state(1,1,flags,&count)==0 && !flags[0] && !flags[3] && count==0);
     assert(trophy_unlock_state(1,1,NULL,&count)==TROPHY_INVALID && trophy_release(0)==TROPHY_INVALID);
     int32_t trophy_ctx=0, trophy_hd=0, platinum=0;
+    /* A label without a list keeps nothing. */
+    int32_t no_list_ctx=0;
+    assert(trophy_context(&no_list_ctx,1,9,0)==0 && trophy_unlock(no_list_ctx,1,3,&platinum)==0 && trophies_shown==0);
+    /* The Last of Us Remastered: service label 0, trophy00.trp. */
+    assert(trophy_context(&trophy_ctx,1,0,0)==0 && trophy_handle(&trophy_hd)==0);
+    assert(trophy_register(trophy_ctx,trophy_hd,0)==0);
+    assert(trophy_unlock(trophy_ctx,trophy_hd,7,&platinum)==0 && trophies_shown==1 && trophy_last_shown==7);
+    assert(trophy_unlock_state(trophy_ctx,trophy_hd,flags,&count)==0 && flags[0]==1u<<7 && count==1);
+    trophies_shown=0;
+    { char p0[128]; trophy_file(0,p0,sizeof(p0)); remove(p0); }
     assert(trophy_context(&trophy_ctx,1,2,0)==0 && trophy_handle(&trophy_hd)==0);
+    trophy_lists_shown=0;
     assert(trophy_register(trophy_ctx,trophy_hd,0)==0 && trophy_lists_shown==1);
     assert(trophy_unlock(trophy_ctx,trophy_hd,5,&platinum)==0 && platinum==-1 && trophies_shown==1 && trophy_last_shown==5);
     assert(trophy_unlock(trophy_ctx,trophy_hd,5,&platinum)==0 && trophies_shown==1);
