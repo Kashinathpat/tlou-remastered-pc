@@ -59,5 +59,6 @@ The Last of Us render-size literals (12 Nov 2026, #5/#66, shader_recompiler/rend
 Shader cache reads (13 Nov 2026): video_core/blob_pack.cpp packs the cache's small files (shaders,
   pipeline binaries) into one mapped file read first, checked by size, write time and hash, and
   written from the warm-up's own reads (GOW3_CACHE_PACK=0); vk_driver_pipeline_cache.cpp keeps the driver's VkPipelineCache data on
-  disk for GPUs without VK_KHR_pipeline_binary (GOW3_VK_PIPELINE_CACHE). SpartanPort 88486eec8:
+  disk for GPUs without VK_KHR_pipeline_binary, and the compute pipelines (no binaries) on the
+  others (GOW3_VK_PIPELINE_CACHE). SpartanPort 88486eec8:
   the global pipeline key query keeps rbx (NVIDIA 595.x clobbers it).

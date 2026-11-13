@@ -203,7 +203,8 @@ void TestDriverStore(const fs::path& dir) {
     assert(!SaveDriverPipelineCache(stamp, file, std::vector<uint8_t>(8)));
     assert(!fs::exists(dir / "vulkan-pipelines.bin.tmp"));
 
-    assert(DriverPipelineCacheWanted(false) && !DriverPipelineCacheWanted(true));
+    assert(DriverPipelineCacheScope(false) == DriverCacheScope::All &&
+           DriverPipelineCacheScope(true) == DriverCacheScope::Compute);
 }
 
 } // namespace

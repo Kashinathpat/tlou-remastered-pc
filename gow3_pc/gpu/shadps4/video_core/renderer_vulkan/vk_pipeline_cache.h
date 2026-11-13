@@ -311,9 +311,15 @@ private:
     AmdGpu::Liverpool* liverpool;
     DescriptorHeap desc_heap;
     vk::UniquePipelineCache pipeline_cache;
-    /// gow3 13 Nov 2026 (vk_driver_pipeline_cache.h): the store of pipeline_cache's data; empty
+    /// gow3 13 Nov 2026 (vk_driver_pipeline_cache.h): the store of the stored cache's data; empty
     /// path = off. Saved a minute after the warm-up when pipelines were added, and at exit.
+    /// Without pipeline binaries the stored cache is pipeline_cache (every pipeline); with them it
+    /// is compute_pipeline_cache, which only compute pipelines use.
     std::filesystem::path driver_cache_file;
+    vk::UniquePipelineCache compute_pipeline_cache;
+    vk::PipelineCache StoredPipelineCache() const {
+        return compute_pipeline_cache ? *compute_pipeline_cache : *pipeline_cache;
+    }
     DriverCacheStamp driver_cache_stamp{};
     std::atomic<size_t> driver_cache_saved_size{0};
     size_t driver_cache_saved_pipelines = 0;

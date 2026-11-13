@@ -148,11 +148,11 @@ bool SaveDriverPipelineCache(const DriverCacheStamp& stamp, const std::filesyste
     return true;
 }
 
-bool DriverPipelineCacheWanted(bool pipeline_binaries) {
+DriverCacheScope DriverPipelineCacheScope(bool pipeline_binaries) {
     if (const char* env = std::getenv("GOW3_VK_PIPELINE_CACHE"); env && *env) {
-        return env[0] != '0';
+        return env[0] == '0' ? DriverCacheScope::Off : DriverCacheScope::All;
     }
-    return !pipeline_binaries;
+    return pipeline_binaries ? DriverCacheScope::Compute : DriverCacheScope::All;
 }
 
 } // namespace Vulkan

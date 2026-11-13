@@ -8,7 +8,9 @@
 // (B580: 13.8 ms a pipeline without it, 0.5 ms with it). This store keeps the compiled pipelines
 // when that cache is off, full, or was emptied (AMD's "Reset Shader Cache", Disk Cleanup).
 // <cache>/vulkan-pipelines.bin: a header naming the device and driver, the data's size and hash,
-// then the driver's data. GOW3_VK_PIPELINE_CACHE=0: off; =1: on with pipeline binaries too.
+// then the driver's data. With pipeline binaries (NVIDIA, AMD's discrete GPUs) it keeps the compute
+// pipelines, which the binary cache does not hold (an RX 7600 compiled them in 26-204 ms each on
+// the GPU thread, #151). GOW3_VK_PIPELINE_CACHE=0: off; =1: every pipeline, binaries or not.
 
 #include <array>
 #include <cstdint>
@@ -41,8 +43,10 @@ std::vector<uint8_t> LoadDriverPipelineCache(const DriverCacheStamp& stamp,
 bool SaveDriverPipelineCache(const DriverCacheStamp& stamp, const std::filesystem::path& file,
                              std::span<const uint8_t> data);
 
-/// Whether the store is used: GOW3_VK_PIPELINE_CACHE, else only without pipeline binaries.
-bool DriverPipelineCacheWanted(bool pipeline_binaries);
+/// What the store keeps: GOW3_VK_PIPELINE_CACHE (0 nothing, 1 every pipeline), else every
+/// pipeline without pipeline binaries and the compute pipelines with them.
+enum class DriverCacheScope { Off, Compute, All };
+DriverCacheScope DriverPipelineCacheScope(bool pipeline_binaries);
 
 /// At window close: the driver's cache to disk, waiting at most `timeout_ms` (vk_pipeline_cache.cpp).
 void SaveDriverPipelineCacheOnExit(unsigned timeout_ms);

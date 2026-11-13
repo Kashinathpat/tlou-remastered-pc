@@ -491,11 +491,13 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         }
     }
 
-    // gow3 13 Nov 2026 (vk_driver_pipeline_cache.h): the driver's pipeline cache from disk on GPUs
-    // without pipeline binaries; then the compiler workers share it (no copy per worker).
+    // gow3 13 Nov 2026 (vk_driver_pipeline_cache.h): the driver's pipeline cache from disk. Without
+    // pipeline binaries it holds every pipeline and the compiler workers share it (no copy per
+    // worker); with them, a cache of its own holds the compute pipelines.
     std::vector<u8> driver_data;
-    if (DriverPipelineCacheWanted(instance.GetPipelineBinaryGlobalKey().keySize != 0) &&
-        EmulatorSettings.IsPipelineCacheEnabled()) {
+    const auto scope =
+        DriverPipelineCacheScope(instance.GetPipelineBinaryGlobalKey().keySize != 0);
+    if (scope != DriverCacheScope::Off && EmulatorSettings.IsPipelineCacheEnabled()) {
         const auto& properties = instance.GetPhysicalDevice().getProperties();
         driver_cache_stamp.vendor_id = properties.vendorID;
         driver_cache_stamp.device_id = properties.deviceID;
@@ -509,29 +511,45 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
             driver_data = LoadDriverPipelineCache(driver_cache_stamp, driver_cache_file);
         }
     }
-    vk::PipelineCacheCreateInfo cache_info{};
-    if (!driver_data.empty()) {
-        cache_info.initialDataSize = driver_data.size();
-        cache_info.pInitialData = driver_data.data();
+    const auto create_cache = [this](std::vector<u8>& data) {
+        vk::PipelineCacheCreateInfo cache_info{};
+        if (!data.empty()) {
+            cache_info.initialDataSize = data.size();
+            cache_info.pInitialData = data.data();
+        }
+        auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_info);
+        if (cache_result != vk::Result::eSuccess && !data.empty()) {
+            data.clear(); // the driver refused its own data: start empty
+            auto retry = instance.GetDevice().createPipelineCacheUnique({});
+            cache_result = retry.result;
+            cache = std::move(retry.value);
+        }
+        ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
+                   vk::to_string(cache_result));
+        return std::move(cache);
+    };
+    // With pipeline binaries the store keeps the compute pipelines only (they have no binaries):
+    // an RX 7600 compiled them in 26-204 ms each on the GPU thread (#151).
+    const bool compute_only = !driver_cache_file.empty() && scope == DriverCacheScope::Compute;
+    if (compute_only) {
+        compute_pipeline_cache = create_cache(driver_data);
+        std::vector<u8> none;
+        pipeline_cache = create_cache(none);
+    } else {
+        pipeline_cache = create_cache(driver_data);
     }
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_info);
-    if (cache_result != vk::Result::eSuccess && !driver_data.empty()) {
-        driver_data.clear(); // the driver refused its own data: start empty
-        auto retry = instance.GetDevice().createPipelineCacheUnique({});
-        cache_result = retry.result;
-        cache = std::move(retry.value);
-    }
-    ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
-               vk::to_string(cache_result));
-    pipeline_cache = std::move(cache);
     if (!driver_cache_file.empty()) {
+        const char* what = compute_only
+                               ? "compute pipelines (the graphics ones are pipeline binaries)"
+                               : "every pipeline (GPU without pipeline binaries)";
         if (driver_data.empty()) {
-            std::printf("Vulkan pipeline cache: kept on disk from now on (GPU without pipeline "
-                        "binaries; GOW3_VK_PIPELINE_CACHE=0: off)\n");
+            std::printf("Vulkan pipeline cache: kept on disk from now on, %s; "
+                        "GOW3_VK_PIPELINE_CACHE=0: off\n",
+                        what);
         } else {
             std::printf("Vulkan pipeline cache: %.1f MiB of the driver's compiled pipelines loaded "
-                        "from disk (GOW3_VK_PIPELINE_CACHE=0: off)\n",
-                        driver_data.size() / 1048576.0);
+                        "from disk, %s; GOW3_VK_PIPELINE_CACHE=0: off\n",
+                        driver_data.size() / 1048576.0, what);
         }
         driver_cache_saved_size = driver_data.size();
         g_driver_cache_owner.store(this, std::memory_order_release);
@@ -542,7 +560,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     {
         const auto count = std::clamp(Gow3Threads::Available() / 2, 1u, 6u);
         const auto capture_count = std::min(2u, std::max(1u, Gow3Threads::Available() / 4));
-        for (unsigned i = 0; i < count && driver_cache_file.empty(); ++i) {
+        // Graphics pipelines build in a cache per worker unless the store holds every pipeline.
+        for (unsigned i = 0; i < count && (driver_cache_file.empty() || compute_only); ++i) {
             auto [result, worker_cache] = instance.GetDevice().createPipelineCacheUnique({});
             ASSERT_MSG(result == vk::Result::eSuccess, "Failed to create compiler pipeline cache");
             worker_pipeline_caches.push_back(std::move(worker_cache));
@@ -571,8 +590,9 @@ PipelineCache::~PipelineCache() {
 }
 
 vk::PipelineCache PipelineCache::WorkerPipelineCache() const {
-    return worker_pipeline_caches.empty() ? *pipeline_cache
-                                          : WorkerPipelineCache();
+    return worker_pipeline_caches.empty()
+               ? *pipeline_cache
+               : *worker_pipeline_caches[AsyncCompiler::WorkerIndex()];
 }
 
 // gow3 13 Nov 2026: the driver's pipeline cache to disk on a worker thread (vkGetPipelineCacheData
@@ -588,7 +608,8 @@ void PipelineCache::SaveDriverPipelineCache(bool force) {
     }
     // At most every 5 minutes while playing (tens of MiB on Intel); the exit save takes the rest.
     const auto now = std::chrono::steady_clock::now();
-    const size_t pipelines = graphics_pipelines.size() + compute_pipelines.size();
+    const size_t pipelines =
+        (compute_pipeline_cache ? 0 : graphics_pipelines.size()) + compute_pipelines.size();
     if (!force && (pipelines == driver_cache_saved_pipelines ||
                    (driver_cache_saved_at != std::chrono::steady_clock::time_point{} &&
                     now - driver_cache_saved_at < std::chrono::minutes(5)))) {
@@ -601,12 +622,13 @@ void PipelineCache::SaveDriverPipelineCache(bool force) {
         const auto started = std::chrono::steady_clock::now();
         const auto device = instance.GetDevice();
         size_t size = 0;
-        if (device.getPipelineCacheData(*pipeline_cache, &size, nullptr) != vk::Result::eSuccess ||
+        if (device.getPipelineCacheData(StoredPipelineCache(), &size, nullptr) !=
+                vk::Result::eSuccess ||
             size == 0 || size == driver_cache_saved_size) {
             return;
         }
         std::vector<u8> data(size);
-        const auto result = device.getPipelineCacheData(*pipeline_cache, &size, data.data());
+        const auto result = device.getPipelineCacheData(StoredPipelineCache(), &size, data.data());
         if ((result != vk::Result::eSuccess && result != vk::Result::eIncomplete) || size == 0) {
             return;
         }
@@ -642,13 +664,14 @@ void PipelineCache::SaveDriverPipelineCacheAtExit(std::chrono::milliseconds time
     auto job = std::async(std::launch::async, [owner] {
         const auto device = owner->instance.GetDevice();
         size_t size = 0;
-        if (device.getPipelineCacheData(*owner->pipeline_cache, &size, nullptr) !=
+        if (device.getPipelineCacheData(owner->StoredPipelineCache(), &size, nullptr) !=
                 vk::Result::eSuccess ||
             size == 0 || size == owner->driver_cache_saved_size) {
             return;
         }
         std::vector<u8> data(size);
-        const auto result = device.getPipelineCacheData(*owner->pipeline_cache, &size, data.data());
+        const auto result =
+            device.getPipelineCacheData(owner->StoredPipelineCache(), &size, data.data());
         if ((result == vk::Result::eSuccess || result == vk::Result::eIncomplete) && size) {
             data.resize(size);
             if (Vulkan::SaveDriverPipelineCache(owner->driver_cache_stamp,
@@ -1151,8 +1174,9 @@ void PipelineCache::RunPrecompile(PrecompiledCompute& job) {
     job.spec.reset();
     job.key.value = HashCombine(job.hash, 0);
     job.pipeline = std::make_unique<ComputePipeline>(
-        instance, scheduler, desc_heap, profile, WorkerPipelineCache(),
-        job.key, job.program->info, module, job.sdata, false);
+        instance, scheduler, desc_heap, profile,
+        compute_pipeline_cache ? *compute_pipeline_cache : WorkerPipelineCache(), job.key,
+        job.program->info, module, job.sdata, false);
     finish(true);
 }
 
@@ -1707,7 +1731,8 @@ const ComputePipeline* PipelineCache::GetComputePipeline(bool indirect) {
 
         ComputePipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
-                                                       *pipeline_cache, compute_key, *sel.infos[0],
+                                                       StoredPipelineCache(), compute_key,
+                                                       *sel.infos[0],
                                                        sel.modules[0], sdata, false);
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
