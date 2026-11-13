@@ -327,7 +327,7 @@ static const MouseLookSite sites[] = {
       0x48, 0x03, 0x00, 0x00, 0x49, 0x89, 0xf4, 0x48},
      24,
      (void *)tlou_aim_input},
-    /* Diagnostics only (GOW3_RAYCAST_DIAG=1, runtime_raycast_diag.c): kept last. */
+    /* Diagnostics only (GOW3_RAYCAST_DIAG=1, runtime_raycast_diag.c). */
     {"The Last of Us Remastered (ray-cast results, diagnostics)",
      0xb5b1e0,
      6,
@@ -335,27 +335,30 @@ static const MouseLookSite sites[] = {
       0xe0, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00},
      24,
      (void *)runtime_raycast_diag_results},
+    /* The interface's quad builder (runtime_hud.c). */
+    {"The Last of Us Remastered (interface quads)",
+     0xaf8d40,
+     6,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec,
+      0x48, 0x49, 0x89, 0xfe, 0x48, 0x8d, 0x3d, 0x15},
+     24,
+     (void *)runtime_hud_quad},
 };
+enum { CAMERA_SITES = 2, RAYCAST_SITE = 2, HUD_SITE = 3, SITE_COUNT = sizeof(sites) / sizeof(sites[0]) };
 
 const MouseLookSite *runtime_mouselook_sites(unsigned *count) {
-    if (!runtime_raycast_diag_enabled()) {
-        static MouseLookSite plain[sizeof(sites) / sizeof(sites[0]) - 1];
-        memcpy(plain, sites, sizeof(plain));
-        *count = sizeof(plain) / sizeof(plain[0]);
-        return plain;
-    }
+    static MouseLookSite chosen[SITE_COUNT];
     const char *env = getenv("GOW3_MOUSE_LOOK_SITES"); /* debugging: a bit mask of the sites */
-    if (env && *env) {
-        static MouseLookSite chosen[sizeof(sites) / sizeof(sites[0])];
-        const unsigned long mask = strtoul(env, NULL, 0);
-        unsigned n = 0;
-        for (unsigned i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i)
-            if (mask & (1ul << i)) chosen[n++] = sites[i];
-        *count = n;
-        return chosen;
+    const unsigned long mask = env && *env ? strtoul(env, NULL, 0) : ~0ul;
+    unsigned n = 0;
+    for (unsigned i = 0; i < SITE_COUNT; ++i) {
+        if (i == RAYCAST_SITE && !runtime_raycast_diag_enabled()) continue;
+        if (i == HUD_SITE && !runtime_hud_enabled()) continue;
+        if (i < CAMERA_SITES && !runtime_mouselook_enabled()) continue;
+        if (mask & (1ul << i)) chosen[n++] = sites[i];
     }
-    *count = sizeof(sites) / sizeof(sites[0]);
-    return sites;
+    *count = n;
+    return chosen;
 }
 
 /* The right stick's x and y clamps, each followed by its store (vmovss [rdi + 0x18 / 0x1c], xmm4). */

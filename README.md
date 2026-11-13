@@ -153,8 +153,9 @@ at 3840x2160).
 
 Ultrawide monitors: a Resolution of another aspect ratio than 16:9 (2560x1080, 3440x1440,
 3840x1600, 5120x1440, ...) also patches the game's camera to show more at the sides with the same
-vertical view, keeps the interface 16:9 in the middle, and puts the cutscene movies between black
-bars instead of stretching them. These patches follow SanyaGames227's
+vertical view, keeps the interface 16:9 in the middle (its full-screen layers, such as the menus'
+dimming, the fades and the rifle scope's black frame, reach the screen's edges), and puts the
+cutscene movies between black bars instead of stretching them. These patches follow SanyaGames227's
 [tlou_r_shadps4_ultrawide](https://github.com/SanyaGames227/tlou_r_shadps4_ultrawide) for
 shadPS4. The width must be a multiple of 16 (the game asserts it; other widths are rounded down).
 `TLOU_ASPECT=0` leaves the image stretched.

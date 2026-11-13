@@ -123,6 +123,12 @@ STARTUP = [
         # with 2 vertices each (lane_coarsening.cpp); off: as it is, which loses the device there.
         ("Contorno do tecido na GTX 900/10 (evita crash)", "GOW3_PASCAL_CLOTH512", "auto", "1", True),
     ]),
+    ("Tela", [
+        # GitHub #139: on a Resolution wider than 16:9, the interface's full-screen layers (menus'
+        # dimming, fades, damage vignette, the rifle scope's black frame) reach the screen's edges
+        # (gow3_pc/src/runtime_hud.c); off: they stop at the 16:9 edges as before.
+        ("Camadas do HUD até as bordas (ultrawide)", "GOW3_HUD_BARS", "1", "0", True),
+    ]),
 ]
 
 # The debug menu in the launcher's languages: {Portuguese text: the other languages, in this order}.
@@ -749,6 +755,24 @@ DEBUG_TEXT = {
         'Obejście tkanin na GTX 900/10 (zapobiega awarii)',
         'Обход ткани на GTX 900/10 (предотвращает вылет)',
         'GTX 900/10 の布の回避策 (クラッシュ防止)'),
+    'Tela': (
+        'Screen',
+        'Pantalla',
+        'Écran',
+        'Bildschirm',
+        'Schermo',
+        'Ekran',
+        'Экран',
+        '画面'),
+    'Camadas do HUD até as bordas (ultrawide)': (
+        'HUD layers reach the screen edges (ultrawide)',
+        'Capas del HUD hasta los bordes (ultrawide)',
+        "Calques de l'interface jusqu'aux bords (ultrawide)",
+        'HUD-Ebenen bis zum Bildrand (Ultrawide)',
+        "Livelli dell'HUD fino ai bordi (ultrawide)",
+        'Warstwy HUD do krawędzi ekranu (ultrawide)',
+        'Слои HUD до краёв экрана (ultrawide)',
+        'HUDのレイヤーを画面端まで表示 (ウルトラワイド)'),
 }
 
 # Controls window: the keyboard and mouse maps the game reads from tlou.ini (key_map, mouse_map:

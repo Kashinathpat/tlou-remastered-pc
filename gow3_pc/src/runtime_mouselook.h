@@ -48,3 +48,7 @@ int runtime_pad_aim_held(void);
 /* runtime_raycast_diag.c (GOW3_RAYCAST_DIAG=1): a site at the mesh ray caster's HandleResults. */
 int runtime_raycast_diag_enabled(void);
 __attribute__((sysv_abi)) void *runtime_raycast_diag_results(void *rdi, void *rsi, void *rdx);
+/* runtime_hud.c: a site at the interface's quad builder (another aspect ratio than 16:9, or
+ * GOW3_HUD_DIAG=1). */
+int runtime_hud_enabled(void);
+__attribute__((sysv_abi)) void *runtime_hud_quad(void *rdi, void *rsi, void *rdx);

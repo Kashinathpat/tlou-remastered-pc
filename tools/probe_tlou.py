@@ -321,6 +321,18 @@ def aspect_patch(size):
     changes.append((site, "C5D258EEC5D2592D" + rel(back, 0x116BC3C), "E9" + rel(site + 5, cave) + nops(7)))
     changes.append((cave, nops(29), "C5D2592D" + rel(cave + 8, cave + 25) + "C5D258EE"
                     + "C5D2592D" + rel(cave + 20, 0x116BC3C) + "E9" + rel(cave + 25, back) + f(r)))
+    # The throwables' target circle (GitHub #143): the aim reticle's update (0x2992xx) keeps its
+    # canvas position at +0x1c34, springs it towards its world point projected by the icon
+    # function above (x R), then turns it back into a world point with 0xaadb50 (canvas -> ray,
+    # 2x/1280 - 1, no R), so each frame pushed the circle R times further from the middle until
+    # it stuck at a screen edge. Its one call goes through a stub that first maps x to
+    # 640 + (x - 640) / R (x / R + 640 (1 - 1/R)); the two constants sit in the padding after the
+    # icon function.
+    stub, constants, call = 0xCFA5E8, 0xAAD8E6, 0x299467
+    changes.append((constants, nops(8), f(1 / r) + f(640 * (1 - 1 / r))))
+    changes.append((stub, nops(21), "C5FA5905" + rel(stub + 8, constants) + "C5FA5805" + rel(stub + 16, constants + 4)
+                    + "E9" + rel(stub + 21, 0xAADB50)))
+    changes.append((call, "E8" + rel(call + 5, 0xAADB50), "E8" + rel(call + 5, stub)))
     # The collectibles' preview camera (pickup notice, artifacts in the backpack): its 60 degree
     # horizontal field of view widens to keep the 16:9 vertical one.
     fov = 2 * math.atan(r * math.tan(1.0470927953720093 / 2))

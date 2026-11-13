@@ -892,7 +892,6 @@ static unsigned build_mouse_look_stub(unsigned char *p, const MouseLookSite *sit
     return n;
 }
 static void install_mouse_look(Segment *segments, uint64_t count, uint64_t size) {
-    if (!runtime_mouselook_enabled()) return;
     unsigned n = 0, used = 0, installed = 0;
     const MouseLookSite *sites = runtime_mouselook_sites(&n);
     unsigned char *stubs = NULL;
@@ -911,12 +910,13 @@ static void install_mouse_look(Segment *segments, uint64_t count, uint64_t size)
             continue;
         }
         runtime_mouselook_set_image(image);
-        printf("Mouse look: %s camera at image offset %#llx\n", site->game, (unsigned long long)site->offset);
+        printf("Entry hook: %s at image offset %#llx\n", site->game, (unsigned long long)site->offset);
         used += 256;
         ++installed;
     }
     if (stubs) protect(stubs, page_size, 5);
-    if (!installed) puts("Mouse look: no known camera code in this executable (mouse acts as the right stick)");
+    if (!installed && runtime_mouselook_enabled())
+        puts("Mouse look: no known camera code in this executable (mouse acts as the right stick)");
 }
 /* Right stick boost (src/runtime_mouselook.h): each site's clamp jumps to a stub that replays it,
  * multiplies xmm4 (the clamped axis) by the boost and jumps back. The boost lives in the stub
