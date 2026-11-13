@@ -94,6 +94,9 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::DepthBuffer& depth_buffer, AmdGpu::De
 ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info_,
                      const Image& image)
     : info{info_} {
+    // gow3 13 Nov 2026 (#150): a view past the image's levels or layers is invalid in Vulkan
+    // (NVIDIA created it, then the barriers for it crashed): the view covers what the image has.
+    const SubresourceRange range = image.FitRange(info.range, "view");
     vk::ImageViewUsageCreateInfo usage_ci{.usage = image.usage_flags};
     if (!info.is_storage) {
         usage_ci.usage &= ~vk::ImageUsageFlagBits::eStorage;
@@ -101,7 +104,7 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     vk::ImageViewMinLodCreateInfoEXT min_lod_ci{};
     if (info.min_lod != 0 && instance.IsImageViewMinLodSupported()) {
         const float last_level =
-            static_cast<float>(info.range.base.level + info.range.extent.levels - 1);
+            static_cast<float>(range.base.level + range.extent.levels - 1);
         min_lod_ci.minLod = std::min(static_cast<float>(info.min_lod) / 256.f, last_level);
         usage_ci.pNext = &min_lod_ci;
     }
@@ -152,10 +155,10 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
         .components = info.mapping,
         .subresourceRange{
             .aspectMask = aspect,
-            .baseMipLevel = info.range.base.level,
-            .levelCount = info.range.extent.levels,
-            .baseArrayLayer = info.range.base.layer,
-            .layerCount = info.range.extent.layers,
+            .baseMipLevel = range.base.level,
+            .levelCount = range.extent.levels,
+            .baseArrayLayer = range.base.layer,
+            .layerCount = range.extent.layers,
         },
     };
     if (!IsViewTypeCompatible(info.type, image.info.type)) {
@@ -174,9 +177,9 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     Vulkan::SetObjectName(
         instance.GetDevice(), *image_view, "ImageView {}x{}x{} {:#x}:{:#x} {}:{} {}:{} ({})",
         image.info.size.width, image.info.size.height, image.info.size.depth,
-        image.info.guest_address, image.info.guest_size, info.range.base.level,
-        info.range.base.level + info.range.extent.levels - 1, info.range.base.layer,
-        info.range.base.layer + info.range.extent.layers - 1, view_aspect);
+        image.info.guest_address, image.info.guest_size, range.base.level,
+        range.base.level + range.extent.levels - 1, range.base.layer,
+        range.base.layer + range.extent.layers - 1, view_aspect);
 }
 
 ImageView::~ImageView() = default;

@@ -147,6 +147,11 @@ struct Image {
     /// gow3: takes `grown` (this image with more layers, within vk_layers) as its description.
     void GrowLayers(const ImageInfo& grown);
 
+    /// gow3: `range` cut to the levels and layers this image has (vk_layers included); `range`
+    /// itself when it fits. When it does not, the case is logged with `what` (first 32, then
+    /// every 1000th).
+    SubresourceRange FitRange(const SubresourceRange& range, const char* what) const;
+
     /// gow3: host memory the image holds, spare layers included.
     u64 MemoryBytes() const {
         if (vk_layers <= info.resources.layers || info.resources.layers == 0) {

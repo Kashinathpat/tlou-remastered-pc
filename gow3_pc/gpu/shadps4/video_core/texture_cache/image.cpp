@@ -755,6 +755,13 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
     auto& last_state = backing->state;
     auto& subresource_states = backing->subresource_states;
 
+    // gow3 13 Nov 2026 (#150): a range past the image's levels or layers ran off
+    // subresource_states (an assertion and a crash, Pittsburgh after 30-45 minutes); only the
+    // subresources the image has are transitioned.
+    if (subres_range) {
+        subres_range = FitRange(*subres_range, vk::to_string(dst_layout).c_str());
+    }
+
     const bool needs_partial_transition =
         subres_range &&
         (subres_range->base != SubresourceBase{} || subres_range->extent != info.resources);
@@ -860,6 +867,39 @@ void Image::GrowLayers(const ImageInfo& grown) {
            grown.resources.layers >= info.resources.layers && grown.resources.layers <= vk_layers);
     info = grown;
     guest_end = guest_begin + info.guest_size;
+}
+
+SubresourceRange Image::FitRange(const SubresourceRange& range, const char* what) const {
+    const u32 levels = std::max(info.resources.levels, 1u);
+    const u32 layers = std::max(vk_layers, 1u);
+    if (range.extent.levels >= 1 && range.extent.layers >= 1 &&
+        u64(range.base.level) + range.extent.levels <= levels &&
+        u64(range.base.layer) + range.extent.layers <= layers) {
+        return range;
+    }
+    SubresourceRange fit;
+    fit.base.level = std::min(range.base.level, levels - 1);
+    fit.base.layer = std::min(range.base.layer, layers - 1);
+    fit.extent.levels = std::clamp(range.extent.levels, 1u, levels - fit.base.level);
+    fit.extent.layers = std::clamp(range.extent.layers, 1u, layers - fit.base.layer);
+
+    static std::atomic<u64> count{0};
+    const u64 n = count.fetch_add(1, std::memory_order_relaxed);
+    if (n < 32 || n % 1000 == 0) {
+        std::printf("Image range outside the image (%s, #%llu): image %#llx size %#llx %ux%ux%u "
+                    "%s type %u tile %u, levels %u, layers %u (%u in Vulkan); asked levels "
+                    "%u+%u layers %u+%u, used levels %u+%u layers %u+%u\n",
+                    what, static_cast<unsigned long long>(n + 1),
+                    static_cast<unsigned long long>(info.guest_address),
+                    static_cast<unsigned long long>(info.guest_size), info.size.width,
+                    info.size.height, info.size.depth, vk::to_string(info.pixel_format).c_str(),
+                    static_cast<u32>(info.type), static_cast<u32>(info.tile_mode),
+                    info.resources.levels, info.resources.layers, vk_layers, range.base.level,
+                    range.extent.levels, range.base.layer, range.extent.layers, fit.base.level,
+                    fit.extent.levels, fit.base.layer, fit.extent.layers);
+        std::fflush(stdout);
+    }
+    return fit;
 }
 
 } // namespace VideoCore
