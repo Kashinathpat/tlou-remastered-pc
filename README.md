@@ -4,6 +4,8 @@ Runs the PS4 **The Last of Us Remastered** (CUSA00552, with its update 1.11) nat
 The game's own x86-64 code runs directly on the PC; a runtime supplies the PS4 system libraries,
 and a Vulkan renderer (the shadPS4 video core) executes the PS4 GPU work.
 
+Discord Server : https://discord.gg/9mnjjezcNj
+
 > **No game files are in this repository.** You need your own copy of the game (the dumped
 > CUSA00552 folder, and its update). This project is not affiliated with Sony Interactive
 > Entertainment or Naughty Dog.
