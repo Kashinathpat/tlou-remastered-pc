@@ -7,7 +7,11 @@
  *
  * Each traced import gets its own thunk that forwards six integer registers. The functions it
  * wraps take no floating point or stack arguments the stubs read, so forwarding six is enough
- * for a diagnostic; GOW3_NET_TRACE is off by default. */
+ * for a diagnostic; GOW3_NET_TRACE is off by default.
+ *
+ * GOW3_NET_TRACE_FILES=1 adds the file calls the online code makes in /download0 (where it
+ * keeps downloaded configuration and profiles): open, stat, rename, unlink, utimes and mkdir of
+ * a path there, and write and close of a descriptor such an open returned. */
 #include "runtime.h"
 #include <inttypes.h>
 #include <pthread.h>
@@ -30,7 +34,29 @@ static int trace_enabled(void) {
     return v;
 }
 
+static const char *const file_calls[] = {"sceKernelOpen", "open", "_open", "sceKernelStat", "stat",
+                                         "sceKernelRename", "rename", "sceKernelUnlink", "unlink",
+                                         "sceKernelUtimes", "sceKernelMkdir", "mkdir",
+                                         "sceKernelWrite", "write", "_write", "sceKernelClose", "close", "_close"};
+static int file_symbol(const char *s) {
+    for (size_t i = 0; i < sizeof(file_calls) / sizeof(*file_calls); ++i)
+        if (!strcmp(s, file_calls[i])) return 1;
+    return 0;
+}
+static int file_trace_enabled(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("GOW3_NET_TRACE_FILES"); v = e && e[0] == '1'; }
+    return v;
+}
+/* Descriptors opened on a /download0 path: their writes and close are logged too. */
+static int32_t traced_fds[32];
+static int traced_fd(int32_t fd) {
+    for (int i = 0; i < 32; ++i) if (traced_fds[i] == fd && fd > 0) return 1;
+    return 0;
+}
+
 static int traced_symbol(const char *s) {
+    if (file_symbol(s)) return file_trace_enabled();
     static const char *const prefixes[] = {"sceNp", "sceNet", "sceHttp", "sceSsl", "sceVoice",
                                            "sceInvitationDialog", "sceRudp", "sceAppContent"};
     for (size_t i = 0; i < sizeof(prefixes) / sizeof(*prefixes); ++i)
@@ -70,6 +96,11 @@ static const ArgInfo arg_info[] = {
     {"sceNetEpollCreate", 1u << 0, -1, 0},
     {"sceNetSocket", 1u << 0, -1, 0},
     {"sceAppContentAddcontMount", 1u << 1, -1, 0},
+    {"sceKernelOpen", 1u << 0, -1, 0}, {"open", 1u << 0, -1, 0}, {"_open", 1u << 0, -1, 0},
+    {"sceKernelStat", 1u << 0, -1, 0}, {"stat", 1u << 0, -1, 0},
+    {"sceKernelRename", 3u, -1, 0}, {"rename", 3u, -1, 0},
+    {"sceKernelUnlink", 1u << 0, -1, 0}, {"unlink", 1u << 0, -1, 0},
+    {"sceKernelUtimes", 1u << 0, -1, 0}, {"sceKernelMkdir", 1u << 0, -1, 0}, {"mkdir", 1u << 0, -1, 0},
     {"sceAppContentAddcontEnqueueDownload", 1u << 1, -1, 0},
     {"sceNetInetPton", 1u << 1, -1, 0},
     {"sceNetBind", 0, 1, 16},
@@ -130,6 +161,16 @@ static ABI uint64_t trace_call(int slot, uint64_t a, uint64_t b, uint64_t c, uin
     /* Strings and structures are printed before the call (outputs may overwrite them). */
     uint32_t n = __atomic_add_fetch(&traced[slot].calls, 1, __ATOMIC_RELAXED);
     int log = !busy_symbol(name) || n <= 8 || n % 500 == 0;
+    int file = file_symbol(name), file_open = 0;
+    if (file) {
+        if (info) { /* a path call: only paths in /download0 */
+            const char *path = (const char *)(uintptr_t)a;
+            log = readable(a, 1) && strstr(path, "download0") != NULL;
+            file_open = log && strstr(name, "open") != NULL;
+        } else {
+            log = traced_fd((int32_t)a); /* write / close */
+        }
+    }
     if (log) {
         size_t used = 0;
         for (int i = 0; i < 6 && used < sizeof(before); ++i) {
@@ -144,6 +185,16 @@ static ABI uint64_t trace_call(int slot, uint64_t a, uint64_t b, uint64_t c, uin
         }
     }
     uint64_t r = traced[slot].fn(a, b, c, d, e, f);
+    if (file_open && (int32_t)r > 0) {
+        pthread_mutex_lock(&trace_lock);
+        for (int i = 0; i < 32; ++i) if (!traced_fds[i]) { traced_fds[i] = (int32_t)r; break; }
+        pthread_mutex_unlock(&trace_lock);
+    }
+    if (file && log && strstr(name, "close")) {
+        pthread_mutex_lock(&trace_lock);
+        for (int i = 0; i < 32; ++i) if (traced_fds[i] == (int32_t)a) traced_fds[i] = 0;
+        pthread_mutex_unlock(&trace_lock);
+    }
     if (log) {
         pthread_mutex_lock(&trace_lock);
         printf("NetTrace: %s(%s) = 0x%x%s [#%u]\n", name, before, (uint32_t)r,

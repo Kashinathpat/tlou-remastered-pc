@@ -143,7 +143,7 @@ int main(void) {
     assert(np_get_account_id(1,&account)==0 && account!=0);
     assert(netctl_info(14,npid)==0 && !strcmp((char *)npid,"10.0.0.2"));
     assert(np_poll(1,&polled)==0 && polled==0);
-    assert(net_unreachable()==NET_ENETUNREACH && http_fail()==HTTP_NETWORK); /* still no transfers */
+    assert(net_unreachable()==NET_ENETUNREACH); /* still no transfers */
     np_signed_in_mode=0;
 
     /* URI parsing (no network): size query first, then the parts copied into the pool. */

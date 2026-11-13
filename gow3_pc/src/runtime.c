@@ -236,6 +236,8 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (memory) return memory;
     uintptr_t kernel = runtime_kernel_resolve(name);
     if (kernel) return kernel;
+    uintptr_t http = runtime_http_resolve(name);
+    if (http) return runtime_nettrace_wrap(name, http);
     uintptr_t services = runtime_services_resolve(name);
     if (services) return runtime_nettrace_wrap(name, services);
     uintptr_t ajm = runtime_ajm_resolve(name);
@@ -253,7 +255,7 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     uintptr_t save = runtime_savedata_resolve(name);
     if (save) return save;
     uintptr_t file = runtime_file_resolve(name);
-    if (file) return file;
+    if (file) return runtime_nettrace_wrap(name, file);
     return gow3gpu_resolve(name);
 }
 static const struct { const char *nid, *symbol; } import_names[]={

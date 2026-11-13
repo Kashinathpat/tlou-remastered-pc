@@ -235,23 +235,8 @@ static ABI int32_t netctl_nat(uint32_t *info) {
 }
 static ABI int32_t lib_init_id(void) { return new_id(); }
 static ABI int32_t ok_void(void) { return 0; }
-static ABI int32_t http_fail(void) { return HTTP_NETWORK; }
-/* Objects are created so setup code proceeds; any transfer fails as unplugged. */
-static ABI int32_t http_object(void) { return new_id(); }
-static ABI int32_t http_epoll(int32_t ctx,void **handle) {
-    (void)ctx;
-    if (!handle) return (int32_t)0x80431077; /* HTTP INVALID_VALUE */
-    *handle=(void *)(uintptr_t)(0x100+new_id()); return 0;
-}
-static ABI int32_t http_wait(void *handle,void *events,int32_t max,int64_t timeout) {
-    (void)handle; (void)events; (void)max;
-#ifdef _WIN32
-    if (timeout>0) compat_sleep_ns((uint64_t)timeout*1000);
-#else
-    if (timeout>0) { struct timespec t={timeout/1000000,(timeout%1000000)*1000}; nanosleep(&t,NULL); }
-#endif
-    return 0; /* no events: nothing is in flight */
-}
+/* HTTP requests (templates, connections, requests, epoll, responses) are in runtime_http.c:
+ * every transfer fails as unplugged unless GOW3_HTTP_FILES serves it from a file. */
 /* sceHttpUriParse(SceHttpUriElement *out, const char *uri, void *pool, size_t *require, size_t
  * prepare): splits a URI, no network involved. Without a pool it only reports the pool size it
  * needs; with one, the parts are copied there. SceHttpUriElement: int32 opaque, then char *scheme
@@ -1003,17 +988,9 @@ static const RuntimeExport exports[]={
     {"sceNetCtlUnregisterCallback",netctl_unregister}, {"sceNetCtlGetNatInfo",netctl_nat},
     {"sceSslInit",lib_init_id}, {"sceSslTerm",ok_void},
     {"sceHttpInit",lib_init_id}, {"sceHttpTerm",ok_void},
-    {"sceHttpCreateTemplate",http_object}, {"sceHttpDeleteTemplate",ok_void},
-    {"sceHttpCreateConnectionWithURL",http_object}, {"sceHttpCreateRequestWithURL",http_object},
-    {"sceHttpSendRequest",http_fail}, {"sceHttpCreateEpoll",http_epoll},
     {"sceHttpSetNonblock",ok_void}, {"sceHttpSetConnectTimeOut",ok_void},
     {"sceHttpsEnableOption",ok_void}, {"sceHttpsDisableOption",ok_void},
     {"sceHttpAddRequestHeader",ok_void}, {"sceHttpSetRequestContentLength",ok_void},
-    {"sceHttpDeleteConnection",ok_void}, {"sceHttpDeleteRequest",ok_void},
-    {"sceHttpAbortWaitRequest",ok_void}, {"sceHttpDestroyEpoll",ok_void},
-    {"sceHttpSetEpoll",ok_void}, {"sceHttpUnsetEpoll",ok_void}, {"sceHttpWaitRequest",http_wait},
-    {"sceHttpGetStatusCode",http_fail}, {"sceHttpGetResponseContentLength",http_fail},
-    {"sceHttpReadData",http_fail},
     {"sceNpGetState",np_state}, {"sceNpGetOnlineId",np_get_online_id}, {"sceNpGetNpId",np_get_np_id},
     {"sceNpRegisterStateCallback",np_register_state}, {"sceNpUnregisterStateCallback",ok_void},
     {"sceNpRegisterGamePresenceCallback",np_register_void}, {"sceNpRegisterPlusEventCallback",np_register},
@@ -1112,7 +1089,6 @@ static const RuntimeExport exports[]={
     {"recvfrom",posix_socket_badf}, {"sendto",posix_socket_badf}, {"shutdown",posix_socket_badf},
     {"sceNetGetpeername",net_unreachable}, {"sceNetHtonll",net_htonll}, {"sceNetNtohll",net_htonll},
     {"sceNetCtlInit",ok_void},
-    {"sceHttpGetAllResponseHeaders",http_fail}, {"sceHttpParseResponseHeader",http_fail},
     {"sceHttpUriBuild",http_uri_build}, {"sceHttpUriParse",http_uri_parse},
     {"sceHttpRemoveRequestHeader",ok_void}, {"sceHttpsSetSslCallback",ok_void},
     {"sceNpCreateRequest",np_request}, {"sceNpGetAccountCountry",np_get_country},

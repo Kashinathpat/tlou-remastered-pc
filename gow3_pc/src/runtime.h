@@ -55,6 +55,10 @@ typedef struct { const char *name; void *function; } RuntimeExport;
 const char *runtime_symbol(const char *nid);
 /* GOW3_NET_TRACE=1: a logging thunk around a network/PSN import (runtime_nettrace.c). */
 uintptr_t runtime_nettrace_wrap(const char *nid, uintptr_t function);
+/* libSceHttp requests (runtime_http.c); GOW3_HTTP_FILES serves them from files. */
+uintptr_t runtime_http_resolve(const char *name);
+int runtime_http_url_file(const char *root, const char *url, char *out, size_t size);
+int32_t runtime_http_parse_header(const char *header, uint64_t len, const char *field, const char **value, uint64_t *value_len);
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *nid);
 uintptr_t runtime_kernel_resolve(const char *name);
 uintptr_t runtime_file_resolve(const char *name);
