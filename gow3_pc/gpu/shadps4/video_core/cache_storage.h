@@ -6,10 +6,12 @@
 #include "common/path_util.h"
 #include "common/singleton.h"
 #include "common/types.h"
+#include "video_core/blob_pack.h"
 
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -69,8 +71,20 @@ public:
     /// false for the zip archive.
     [[nodiscard]] bool Exists(BlobType type, const std::string& name) const;
 
+    /// gow3 13 Nov 2026 (blob_pack.h): the pack of `directory`'s files when it is the pipeline
+    /// binary store of this cache, else null.
+    [[nodiscard]] BlobPack* PackFor(const std::filesystem::path& directory) const;
+    /// gow3 13 Nov 2026: once a session, after the warm-up: the new packs written from its reads
+    /// (when the current ones missed enough files) are completed for the next start.
+    void FinishPacks();
+    /// gow3: "Cache pack: ..." with the reads served by the packs so far.
+    void ReportPacks() const;
+
 private:
     std::jthread io_worker{};
+    std::unique_ptr<BlobPack> shader_pack;
+    std::unique_ptr<BlobPack> binary_pack;
+    std::atomic<bool> packs_finished{};
     std::filesystem::path cache_path{};
     std::atomic<bool> opened{}; ///< gow3: read by the window thread's exit flush
 };

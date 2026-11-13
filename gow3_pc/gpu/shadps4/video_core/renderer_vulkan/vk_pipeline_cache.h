@@ -4,6 +4,9 @@
 #pragma once
 
 #include <chrono>
+#include <filesystem>
+#include <future>
+#include <mutex>
 #include <functional>
 #include <string>
 #include <vector>
@@ -20,6 +23,7 @@
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 #include "video_core/renderer_vulkan/vk_async_compiler.h"
+#include "video_core/renderer_vulkan/vk_driver_pipeline_cache.h"
 
 template <>
 struct std::hash<vk::ShaderModule> {
@@ -154,6 +158,9 @@ public:
     bool StartBackgroundWarmUp();
     void StartOnDemand();
     void Sync();
+    /// gow3 13 Nov 2026: writes the driver's pipeline cache (vk_driver_pipeline_cache.h) before
+    /// the process ends, waiting at most `timeout`; any thread.
+    static void SaveDriverPipelineCacheAtExit(std::chrono::milliseconds timeout);
     void ReportCompilerStats();
 
     bool LoadComputePipeline(Serialization::Archive& ar);
@@ -304,12 +311,24 @@ private:
     AmdGpu::Liverpool* liverpool;
     DescriptorHeap desc_heap;
     vk::UniquePipelineCache pipeline_cache;
+    /// gow3 13 Nov 2026 (vk_driver_pipeline_cache.h): the store of pipeline_cache's data; empty
+    /// path = off. Saved a minute after the warm-up when pipelines were added, and at exit.
+    std::filesystem::path driver_cache_file;
+    DriverCacheStamp driver_cache_stamp{};
+    std::atomic<size_t> driver_cache_saved_size{0};
+    size_t driver_cache_saved_pipelines = 0;
+    std::chrono::steady_clock::time_point driver_cache_saved_at{};
+    std::future<void> driver_cache_saving;
+    std::mutex driver_cache_exit_mutex;
     vk::UniquePipelineLayout pipeline_layout;
     Shader::Profile profile{};
     Shader::Pools pools;
     CompilerPool<Shader::Pools> compiler_pools{8};
     std::unique_ptr<AsyncCompiler> compiler, capture_compiler;
     std::vector<vk::UniquePipelineCache> worker_pipeline_caches;
+    /// The cache a compiler worker builds with: its own, or the main one with the store on.
+    vk::PipelineCache WorkerPipelineCache() const;
+    void SaveDriverPipelineCache(bool force);
     bool worker_caches_seeded = false;
     /// gow3: GOW3_PARALLEL_WARMUP: WarmUp builds the cached pipelines on these threads.
     struct WarmupPool;

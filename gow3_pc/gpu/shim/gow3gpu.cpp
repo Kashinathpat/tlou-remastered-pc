@@ -18,6 +18,7 @@
 #include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
 #include "video_core/renderdoc.h"
+#include "video_core/renderer_vulkan/vk_driver_pipeline_cache.h"
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -518,6 +519,8 @@ extern "C" int gow3gpu_init(const Gow3GpuConfig* config) {
             WindowThreadIdle(window->GetSDLWindow());
         }
         LOG_INFO(Frontend, "Window closed by user");
+        // gow3 13 Nov 2026: the driver's pipeline cache (GPUs without pipeline binaries).
+        Vulkan::SaveDriverPipelineCacheOnExit(1500);
         // gow3 (SpartanPort c22329f): shaders compiled just before closing are still queued
         // for the disk; give them up to 2 s.
         if (!Storage::DataBase::Instance().Flush(std::chrono::seconds(2))) {

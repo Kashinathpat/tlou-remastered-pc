@@ -257,6 +257,9 @@ bool Save(const std::filesystem::path& file, std::span<const u8> bytes) {
     if (error) {
         return false;
     }
+    if (auto* pack = Storage::DataBase::Instance().PackFor(file.parent_path())) {
+        pack->Invalidate(file.filename().string());
+    }
     // Unique siblings avoid concurrent writers truncating one another's temporary data.
     static std::atomic<u64> sequence{0};
     auto temp = file;
@@ -289,18 +292,27 @@ bool Save(const std::filesystem::path& file, std::span<const u8> bytes) {
 }
 std::optional<std::vector<Binary>> Load(const std::filesystem::path& file, const Key& global,
                                         const Key& pipeline, u64 graphics_hash) {
-    std::ifstream stream(file, std::ios::binary | std::ios::ate);
-    if (!stream) {
-        return std::nullopt;
-    }
-    const auto size = stream.tellg();
-    if (size <= 0 || size > std::streamoff(MaxFileSize)) {
-        return std::nullopt;
-    }
-    std::vector<u8> bytes(static_cast<size_t>(size));
-    stream.seekg(0);
-    if (!stream.read(reinterpret_cast<char*>(bytes.data()), bytes.size())) {
-        return std::nullopt;
+    std::vector<u8> bytes;
+    // gow3 13 Nov 2026 (blob_pack.h): the store's pack first, as the file is now.
+    auto* pack = Storage::DataBase::Instance().PackFor(file.parent_path());
+    const auto file_name = pack ? file.filename().string() : std::string{};
+    if (!pack || !pack->Read(file_name, bytes) || bytes.size() > MaxFileSize) {
+        std::ifstream stream(file, std::ios::binary | std::ios::ate);
+        if (!stream) {
+            return std::nullopt;
+        }
+        const auto size = stream.tellg();
+        if (size <= 0 || size > std::streamoff(MaxFileSize)) {
+            return std::nullopt;
+        }
+        bytes.resize(static_cast<size_t>(size));
+        stream.seekg(0);
+        if (!stream.read(reinterpret_cast<char*>(bytes.data()), bytes.size())) {
+            return std::nullopt;
+        }
+        if (pack) {
+            pack->Keep(file_name, bytes);
+        }
     }
     auto binaries = Decode(bytes, global, pipeline, graphics_hash);
     if (!binaries) {
@@ -1878,6 +1890,9 @@ void PipelineCache::PumpWarmUp() {
                 binary_key_ns.load() / 1e9, binary_load_ns.load() / 1e9,
                 binary_handles_ns.load() / 1e9, binary_restore_ns.load() / 1e9,
                 binary_compile_ns.load() / 1e9);
+    Storage::DataBase::Instance().ReportPacks();
+    // gow3 13 Nov 2026: the packs written from the warm-up's reads, for the next start.
+    Storage::DataBase::Instance().FinishPacks();
     extern std::atomic<u64> g_gow3_pipeline_total_ns, g_gow3_pipeline_driver_ns;
     extern std::atomic<u32> g_gow3_pipelines_built;
     const u32 built = std::max(1u, g_gow3_pipelines_built.load());
@@ -1939,6 +1954,10 @@ void PipelineCache::NoteWarmupOrder() {
     }
     warm_order_saved = now;
     SaveWarmupOrder();
+    // gow3 13 Nov 2026: without a background warm-up, the packs written from the reads so far are
+    // completed a minute in (blob_pack.h; once a session).
+    db.FinishPacks();
+    SaveDriverPipelineCache(false);
 }
 
 void PipelineCache::SaveWarmupOrder() {

@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include "gow3_threads.h"
 
+#include "common/elf_info.h"
 #include "common/hash.h"
 #include "common/thread.h"
 #include "common/io_file.h"
@@ -32,6 +33,7 @@
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
 #include "video_core/renderer_vulkan/motion_history.h"
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
+#include "video_core/renderer_vulkan/vk_driver_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -360,6 +362,11 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
     return info;
 }
 
+namespace {
+// gow3 13 Nov 2026: the cache whose driver data is kept on disk, for the save at window close.
+std::atomic<PipelineCache*> g_driver_cache_owner{nullptr};
+} // namespace
+
 PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              AmdGpu::Liverpool* liverpool_, u32 sparse_page_shift)
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
@@ -484,16 +491,58 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         }
     }
 
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
+    // gow3 13 Nov 2026 (vk_driver_pipeline_cache.h): the driver's pipeline cache from disk on GPUs
+    // without pipeline binaries; then the compiler workers share it (no copy per worker).
+    std::vector<u8> driver_data;
+    if (DriverPipelineCacheWanted(instance.GetPipelineBinaryGlobalKey().keySize != 0) &&
+        EmulatorSettings.IsPipelineCacheEnabled()) {
+        const auto& properties = instance.GetPhysicalDevice().getProperties();
+        driver_cache_stamp.vendor_id = properties.vendorID;
+        driver_cache_stamp.device_id = properties.deviceID;
+        driver_cache_stamp.driver_version = properties.driverVersion;
+        std::memcpy(driver_cache_stamp.cache_uuid.data(), properties.pipelineCacheUUID.data(),
+                    driver_cache_stamp.cache_uuid.size());
+        const auto serial = Common::ElfInfo::Instance().GameSerial();
+        if (!serial.empty()) {
+            driver_cache_file = Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
+                                std::string{serial} / "vulkan-pipelines.bin";
+            driver_data = LoadDriverPipelineCache(driver_cache_stamp, driver_cache_file);
+        }
+    }
+    vk::PipelineCacheCreateInfo cache_info{};
+    if (!driver_data.empty()) {
+        cache_info.initialDataSize = driver_data.size();
+        cache_info.pInitialData = driver_data.data();
+    }
+    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique(cache_info);
+    if (cache_result != vk::Result::eSuccess && !driver_data.empty()) {
+        driver_data.clear(); // the driver refused its own data: start empty
+        auto retry = instance.GetDevice().createPipelineCacheUnique({});
+        cache_result = retry.result;
+        cache = std::move(retry.value);
+    }
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+    if (!driver_cache_file.empty()) {
+        if (driver_data.empty()) {
+            std::printf("Vulkan pipeline cache: kept on disk from now on (GPU without pipeline "
+                        "binaries; GOW3_VK_PIPELINE_CACHE=0: off)\n");
+        } else {
+            std::printf("Vulkan pipeline cache: %.1f MiB of the driver's compiled pipelines loaded "
+                        "from disk (GOW3_VK_PIPELINE_CACHE=0: off)\n",
+                        driver_data.size() / 1048576.0);
+        }
+        driver_cache_saved_size = driver_data.size();
+        g_driver_cache_owner.store(this, std::memory_order_release);
+    }
+    driver_data = {};
     // gow3: the compiler threads always exist; the in-game menu switches async compilation live
     // (Gow3Settings::async_shaders, GOW3_ASYNC_SHADERS at start).
     {
         const auto count = std::clamp(Gow3Threads::Available() / 2, 1u, 6u);
         const auto capture_count = std::min(2u, std::max(1u, Gow3Threads::Available() / 4));
-        for (unsigned i = 0; i < count; ++i) {
+        for (unsigned i = 0; i < count && driver_cache_file.empty(); ++i) {
             auto [result, worker_cache] = instance.GetDevice().createPipelineCacheUnique({});
             ASSERT_MSG(result == vk::Result::eSuccess, "Failed to create compiler pipeline cache");
             worker_pipeline_caches.push_back(std::move(worker_cache));
@@ -514,6 +563,106 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
 PipelineCache::~PipelineCache() {
     StopWarmUp();
     FinishCompilations();
+    PipelineCache* self = this;
+    g_driver_cache_owner.compare_exchange_strong(self, nullptr);
+    if (driver_cache_saving.valid()) {
+        driver_cache_saving.wait();
+    }
+}
+
+vk::PipelineCache PipelineCache::WorkerPipelineCache() const {
+    return worker_pipeline_caches.empty() ? *pipeline_cache
+                                          : WorkerPipelineCache();
+}
+
+// gow3 13 Nov 2026: the driver's pipeline cache to disk on a worker thread (vkGetPipelineCacheData
+// needs no external synchronization; with the store on, every compile uses this one cache).
+// `force` saves even when no pipeline was added; the call returns at once.
+void PipelineCache::SaveDriverPipelineCache(bool force) {
+    if (driver_cache_file.empty()) {
+        return;
+    }
+    if (driver_cache_saving.valid() &&
+        driver_cache_saving.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return; // the last one still runs
+    }
+    // At most every 5 minutes while playing (tens of MiB on Intel); the exit save takes the rest.
+    const auto now = std::chrono::steady_clock::now();
+    const size_t pipelines = graphics_pipelines.size() + compute_pipelines.size();
+    if (!force && (pipelines == driver_cache_saved_pipelines ||
+                   (driver_cache_saved_at != std::chrono::steady_clock::time_point{} &&
+                    now - driver_cache_saved_at < std::chrono::minutes(5)))) {
+        return;
+    }
+    driver_cache_saved_pipelines = pipelines;
+    driver_cache_saved_at = now;
+    driver_cache_saving = std::async(std::launch::async, [this] {
+        Common::SetCurrentThreadName("gow3:PipelineCacheSave");
+        const auto started = std::chrono::steady_clock::now();
+        const auto device = instance.GetDevice();
+        size_t size = 0;
+        if (device.getPipelineCacheData(*pipeline_cache, &size, nullptr) != vk::Result::eSuccess ||
+            size == 0 || size == driver_cache_saved_size) {
+            return;
+        }
+        std::vector<u8> data(size);
+        const auto result = device.getPipelineCacheData(*pipeline_cache, &size, data.data());
+        if ((result != vk::Result::eSuccess && result != vk::Result::eIncomplete) || size == 0) {
+            return;
+        }
+        data.resize(size);
+        if (Vulkan::SaveDriverPipelineCache(driver_cache_stamp, driver_cache_file, data)) {
+            driver_cache_saved_size = size;
+            std::printf("Vulkan pipeline cache: %.1f MiB saved (%.0f ms)\n", size / 1048576.0,
+                        std::chrono::duration<double, std::milli>(
+                            std::chrono::steady_clock::now() - started)
+                            .count());
+            std::fflush(stdout);
+        }
+    });
+}
+
+void SaveDriverPipelineCacheOnExit(unsigned timeout_ms) {
+    PipelineCache::SaveDriverPipelineCacheAtExit(std::chrono::milliseconds(timeout_ms));
+}
+
+void PipelineCache::SaveDriverPipelineCacheAtExit(std::chrono::milliseconds timeout) {
+    auto* owner = g_driver_cache_owner.load(std::memory_order_acquire);
+    if (!owner) {
+        return;
+    }
+    // From the window thread while the GPU thread may still run: only the store's own state is
+    // touched (the pipeline count read for the "changed" test is skipped by `force`).
+    std::scoped_lock lock{owner->driver_cache_exit_mutex};
+    if (owner->driver_cache_saving.valid()) {
+        if (owner->driver_cache_saving.wait_for(timeout) != std::future_status::ready) {
+            return;
+        }
+    }
+    auto job = std::async(std::launch::async, [owner] {
+        const auto device = owner->instance.GetDevice();
+        size_t size = 0;
+        if (device.getPipelineCacheData(*owner->pipeline_cache, &size, nullptr) !=
+                vk::Result::eSuccess ||
+            size == 0 || size == owner->driver_cache_saved_size) {
+            return;
+        }
+        std::vector<u8> data(size);
+        const auto result = device.getPipelineCacheData(*owner->pipeline_cache, &size, data.data());
+        if ((result == vk::Result::eSuccess || result == vk::Result::eIncomplete) && size) {
+            data.resize(size);
+            if (Vulkan::SaveDriverPipelineCache(owner->driver_cache_stamp,
+                                                owner->driver_cache_file, data)) {
+                owner->driver_cache_saved_size = size;
+            }
+        }
+    });
+    if (job.wait_for(timeout) != std::future_status::ready) {
+        // The process ends now: the file is written beside and renamed, so at worst it stays as
+        // it was. The job is left running (its future's destructor would wait for it).
+        static std::future<void> abandoned;
+        abandoned = std::move(job);
+    }
 }
 
 // gow3: shader/pipeline compile time on the GPU thread, reported by GOW3_FRAME_STATS.
@@ -764,9 +913,12 @@ void PipelineCache::FinishCompilations() {
         for (const auto& cache : worker_pipeline_caches) {
             sources.push_back(*cache);
         }
-        const auto result = instance.GetDevice().mergePipelineCaches(*pipeline_cache, sources);
-        if (result != vk::Result::eSuccess) {
-            LOG_ERROR(Render_Vulkan, "gow3: compiler cache merge failed: {}", vk::to_string(result));
+        if (!sources.empty()) {
+            const auto result = instance.GetDevice().mergePipelineCaches(*pipeline_cache, sources);
+            if (result != vk::Result::eSuccess) {
+                LOG_ERROR(Render_Vulkan, "gow3: compiler cache merge failed: {}",
+                          vk::to_string(result));
+            }
         }
     }
 }
@@ -801,6 +953,7 @@ void PipelineCache::SeedWorkerCaches() {
     if (!compiler || worker_caches_seeded) {
         return;
     }
+    // With the driver's cache from disk the workers use the main cache itself (none here).
     for (const auto& cache : worker_pipeline_caches) {
         const auto result = instance.GetDevice().mergePipelineCaches(*cache, *pipeline_cache);
         ASSERT_MSG(result == vk::Result::eSuccess, "Failed to seed compiler pipeline cache");
@@ -998,7 +1151,7 @@ void PipelineCache::RunPrecompile(PrecompiledCompute& job) {
     job.spec.reset();
     job.key.value = HashCombine(job.hash, 0);
     job.pipeline = std::make_unique<ComputePipeline>(
-        instance, scheduler, desc_heap, profile, *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
+        instance, scheduler, desc_heap, profile, WorkerPipelineCache(),
         job.key, job.program->info, module, job.sdata, false);
     finish(true);
 }
@@ -1341,7 +1494,7 @@ void PipelineCache::DrainPrefetch() {
             auto& s = build->selection;
             build->pipeline = std::make_unique<GraphicsPipeline>(
                 instance, scheduler, desc_heap, profile, s.graphics_key,
-                *worker_pipeline_caches[AsyncCompiler::WorkerIndex()], s.infos, s.runtime_infos,
+                WorkerPipelineCache(), s.infos, s.runtime_infos,
                 s.fetch_shader, s.modules, build->data, false);
             return build;
         });
@@ -1419,7 +1572,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                 auto& s = build->selection;
                 build->pipeline = std::make_unique<GraphicsPipeline>(
                     instance, scheduler, desc_heap, profile, s.graphics_key,
-                    *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
+                    WorkerPipelineCache(),
                     s.infos, s.runtime_infos, s.fetch_shader, s.modules, build->data, false);
                 return build;
             });
@@ -1468,7 +1621,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                 auto& s = build->selection;
                 build->pipeline = std::make_unique<GraphicsPipeline>(
                     instance, scheduler, desc_heap, profile, s.graphics_key,
-                    *worker_pipeline_caches[AsyncCompiler::WorkerIndex()], s.infos, s.runtime_infos,
+                    WorkerPipelineCache(), s.infos, s.runtime_infos,
                     s.fetch_shader, s.modules, build->data, false);
                 return build;
             }, true);

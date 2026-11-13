@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <exception>
 #include <functional>
 #include <mutex>
@@ -115,6 +116,14 @@ void DataBase::Open() {
                         error.message());
             return;
         }
+        // gow3 13 Nov 2026 (blob_pack.h): packed copies of the small files, read first.
+        shader_pack = std::make_unique<BlobPack>(cache_path, "shaders.pack", [](std::string_view file) {
+            return file.ends_with(".meta") || file.ends_with(".spv") || file.ends_with(".key");
+        });
+        binary_pack = std::make_unique<BlobPack>(cache_path / "pipeline-binaries", "binaries.pack",
+                                                 [](std::string_view file) {
+                                                     return file.ends_with(".bin");
+                                                 });
     }
 
     io_worker = std::jthread{ProcessIO};
@@ -128,6 +137,7 @@ void DataBase::Close() {
 
     io_worker.request_stop();
     io_worker.join();
+    ReportPacks();
 
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         mz_zip_writer_finalize_archive(&zip_ar);
@@ -135,6 +145,8 @@ void DataBase::Close() {
     }
 
     opened = false;
+    shader_pack.reset();
+    binary_pack.reset();
     LOG_INFO(Render, "Cache dumped");
 }
 
@@ -241,6 +253,9 @@ bool DataBase::Save(BlobType type, const std::string& name, std::vector<u8>&& da
     if (!opened) {
         return false;
     }
+    if (shader_pack && type != BlobType::ShaderProfile) {
+        shader_pack->Invalidate(name + "." + GetBlobFileExtension(type));
+    }
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
@@ -250,6 +265,9 @@ bool DataBase::Save(BlobType type, const std::string& name, std::vector<u8>&& da
 bool DataBase::Save(BlobType type, const std::string& name, std::vector<u32>&& data) {
     if (!opened) {
         return false;
+    }
+    if (shader_pack && type != BlobType::ShaderProfile) {
+        shader_pack->Invalidate(name + "." + GetBlobFileExtension(type));
     }
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
@@ -261,20 +279,38 @@ void DataBase::Load(BlobType type, const std::string& name, std::vector<u8>& dat
     if (!opened) {
         return;
     }
+    const bool packed = shader_pack && type != BlobType::ShaderProfile;
+    const auto file_name = packed ? name + "." + GetBlobFileExtension(type) : std::string{};
+    if (packed && shader_pack->Read(file_name, data)) {
+        return;
+    }
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
-    return LoadVector(type, path, data);
+    LoadVector(type, path, data);
+    if (packed && !data.empty()) {
+        shader_pack->Keep(file_name, {reinterpret_cast<const u8*>(data.data()),
+                                      data.size() * sizeof(data[0])});
+    }
 }
 
 void DataBase::Load(BlobType type, const std::string& name, std::vector<u32>& data) {
     if (!opened) {
         return;
     }
+    const bool packed = shader_pack && type != BlobType::ShaderProfile;
+    const auto file_name = packed ? name + "." + GetBlobFileExtension(type) : std::string{};
+    if (packed && shader_pack->Read(file_name, data)) {
+        return;
+    }
 
     auto path = EmulatorSettings.IsPipelineCacheArchived() ? std::filesystem::path{name}
                                                            : cache_path / name;
-    return LoadVector(type, path, data);
+    LoadVector(type, path, data);
+    if (packed && !data.empty()) {
+        shader_pack->Keep(file_name, {reinterpret_cast<const u8*>(data.data()),
+                                      data.size() * sizeof(data[0])});
+    }
 }
 
 size_t DataBase::CountBlobs(BlobType type) {
@@ -356,11 +392,22 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
                 return;
             }
             if (file_name.path().extension().string().ends_with(ext)) {
+                std::vector<u8> data;
+                if (shader_pack && type != BlobType::ShaderProfile) {
+                    const auto name = file_name.path().filename().string();
+                    if (shader_pack->Read(name, data)) {
+                        func(std::move(data));
+                        continue;
+                    }
+                }
                 using namespace Common::FS;
                 const auto& file = IOFile{file_name, FileAccessMode::Read};
                 if (file.IsOpen()) {
-                    std::vector<u8> data(file.GetSize());
+                    data.resize(file.GetSize());
                     file.Read(data);
+                    if (shader_pack && type != BlobType::ShaderProfile) {
+                        shader_pack->Keep(file_name.path().filename().string(), data);
+                    }
                     func(std::move(data));
                 }
             }
@@ -372,6 +419,9 @@ void DataBase::Clear() {
     if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
         return;
     }
+    // gow3 13 Nov 2026: a mapped pack can be neither deleted nor moved.
+    shader_pack->Close();
+    binary_pack->Close();
     std::error_code ec;
     u64 removed = 0;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
@@ -390,6 +440,8 @@ bool DataBase::SwapCache(const std::function<bool(const std::vector<u8>&)>& matc
     if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
         return false;
     }
+    shader_pack->Close();
+    binary_pack->Close();
     namespace fs = std::filesystem;
     constexpr size_t MaxKept = 2;
     const fs::path parent = cache_path.parent_path();
@@ -480,6 +532,9 @@ void DataBase::Remove(BlobType type, const std::string& name) {
     if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
         return;
     }
+    if (shader_pack && type != BlobType::ShaderProfile) {
+        shader_pack->Invalidate(name + "." + GetBlobFileExtension(type));
+    }
     auto path = cache_path / (name + "." + GetBlobFileExtension(type));
     {
         std::scoped_lock lock{m_request};
@@ -516,6 +571,44 @@ bool DataBase::WrittenTogether(BlobType type_a, const std::string& name_a, BlobT
     // IO thread is busy). One rewritten by a later session is minutes or days apart.
     const auto apart = time_a > time_b ? time_a - time_b : time_b - time_a;
     return apart <= std::chrono::seconds(30);
+}
+
+BlobPack* DataBase::PackFor(const std::filesystem::path& directory) const {
+    if (!opened || !binary_pack) {
+        return nullptr;
+    }
+    return directory.lexically_normal() == (cache_path / "pipeline-binaries").lexically_normal()
+               ? binary_pack.get()
+               : nullptr;
+}
+
+void DataBase::FinishPacks() {
+    if (!opened || !shader_pack || !BlobPack::Enabled() || packs_finished.exchange(true)) {
+        return;
+    }
+    for (auto* pack : {shader_pack.get(), binary_pack.get()}) {
+        const auto result = pack->Finish();
+        if (result.built) {
+            std::printf("Cache pack: %zu files packed from this session's reads (%.1f MiB; %zu of "
+                        "%zu were in the old pack), used from the next start\n",
+                        result.written, result.bytes / 1048576.0, result.covered,
+                        result.loose_files);
+        }
+    }
+    std::fflush(stdout);
+}
+
+void DataBase::ReportPacks() const {
+    if (!shader_pack || !BlobPack::Enabled()) {
+        return;
+    }
+    std::printf("Cache pack: shaders %llu reads packed, %llu from files; pipeline binaries %llu "
+                "packed, %llu from files (GOW3_CACHE_PACK=0: off)\n",
+                static_cast<unsigned long long>(shader_pack->Hits()),
+                static_cast<unsigned long long>(shader_pack->Misses()),
+                static_cast<unsigned long long>(binary_pack->Hits()),
+                static_cast<unsigned long long>(binary_pack->Misses()));
+    std::fflush(stdout);
 }
 
 void DataBase::FinishPreload() {

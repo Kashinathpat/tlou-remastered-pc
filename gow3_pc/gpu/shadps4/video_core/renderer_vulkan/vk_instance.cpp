@@ -329,6 +329,29 @@ bool PipelineBinaryCacheRequested() {
     const char* setting = std::getenv("GOW3_PIPELINE_BINARIES");
     return !setting || *setting != '0';
 }
+
+// gow3 13 Nov 2026 (SpartanPort 88486eec8): NVIDIA 595.x (595.104.02, 595.112.07) returns from
+// vkGetPipelineKeyKHR(device, nullptr, key) with rbx, a callee-saved register, set to 1; 615.78.08
+// keeps it. A caller holding the key pointer in rbx then crashed reading 0x11 at startup. Pipeline
+// keys with a create info and the other binary calls keep rbx. The clobber makes this noinline
+// function save rbx on entry and restore it on return, whatever the driver leaves in it.
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+[[gnu::noinline]] VkResult GetGlobalPipelineKeyKeepingRbx(VkDevice device,
+                                                          VkPipelineBinaryKeyKHR* key) {
+    const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPipelineKeyKHR(device, nullptr, key);
+    asm volatile("" ::: "rbx");
+    return result;
+}
+#endif
+
+vk::Result GetGlobalPipelineKey(vk::Device device, vk::PipelineBinaryKeyKHR& key) {
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+    return vk::Result{GetGlobalPipelineKeyKeepingRbx(
+        static_cast<VkDevice>(device), reinterpret_cast<VkPipelineBinaryKeyKHR*>(&key))};
+#else
+    return device.getPipelineKeyKHR(nullptr, &key);
+#endif
+}
 }
 
 bool InitializePipelineBinaryCache(vk::Device device, bool supported,
@@ -349,7 +372,7 @@ bool InitializePipelineBinaryCache(vk::Device device, bool supported,
         LOG_WARNING(Render_Vulkan, "Pipeline binary cache functions unavailable; using normal compilation");
         return false;
     }
-    const auto result = device.getPipelineKeyKHR(nullptr, &global_key);
+    const auto result = GetGlobalPipelineKey(device, global_key);
     if (result != vk::Result::eSuccess || !global_key.keySize ||
         global_key.keySize > VK_MAX_PIPELINE_BINARY_KEY_SIZE_KHR) {
         const auto key_size = global_key.keySize;
