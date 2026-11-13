@@ -7,8 +7,9 @@
  * instruction breakpoints; the same scheme as the Uncharted ports' camera hooks):
  *  - Third-person camera: the player camera's input step 0x297440(camera, stick), called from its
  *    update 0x2961a0 with the stick block (right stick at +8/+0xc, the raw one at +0x18/+0x1c).
- *    Yaw: 0x298bc0(camera + 0x1d0, ...) turns the look direction at camera + 0x1e0 (sin h, 0,
- *    cos h, 0; h in degrees, the stick's positive x lowers it) by speed * dt * stick x * scale,
+ *    Yaw: 0x298bc0(camera + 0x1d0, ...) turns the wanted look direction at camera + 0x1e0 (sin h,
+ *    0, cos h, 0; h in degrees, the stick's positive x lowers it; the shown direction at +0x1d0
+ *    eases towards it) by speed * dt * stick x * scale,
  *    with a speed ramp (+0x200 now, up to the tuning's +0x4dc and the cap +0x208) and the scale at
  *    +0x510. Pitch: a 0..1 position on the camera's vertical curve at +0x380 (copy at +0x340),
  *    stepped by the game's 0x754610(camera + 0x220, pitch, delta) with delta = smoothed stick y *
@@ -216,6 +217,13 @@ static ABI void *tlou_camera_input(unsigned char *camera, const float *stick, vo
         if (dx != 0.0f && !camera[0x1d0 + 0x28]) {
             const float angle = -dx * per_count * look_invert_x();
             turn_xz(direction, angle);
+            /* 13 Nov 2026 (GitHub #138, #150: the camera kept moving after the mouse stopped):
+             * the yaw controller holds the shown direction at +0x00 (camera + 0x1d0) and eases it
+             * towards the wanted one at +0x10 (+0x1e0), each frame closing about a third of the
+             * gap; a fast mouse left the shown camera 25-45 degrees behind (traces in Pittsburgh).
+             * The mouse turns both, so the camera follows it at once; the game's own camera moves
+             * keep their easing. */
+            turn_xz((float *)(camera + 0x1d0), angle);
             asked = angle * 57.29578f;
         }
         if (dy != 0.0f) {
@@ -246,6 +254,31 @@ static ABI void *tlou_camera_input(unsigned char *camera, const float *stick, vo
         snprintf(extra, sizeof(extra), ", curve %.3f, pitch %.1f", *(const float *)(camera + 0x380),
                  asinf(forward_y < -1.0f ? -1.0f : forward_y > 1.0f ? 1.0f : forward_y) * 57.29578f);
         turn_debug(&follow_debug, heading_of(direction), asked, extra);
+        if (getenv("GOW3_MOUSE_LOOK_TRACE")) {
+            /* every call: the turned direction's heading against the shown camera's (its last
+             * locator), to see how far the shown camera lags */
+            const float fx = 2.0f * (q[0] * q[2] + q[3] * q[1]), fz = 1.0f - 2.0f * (q[0] * q[0] + q[1] * q[1]);
+            const float shown = atan2f(fx, fz) * 57.29578f, target = heading_of(direction);
+            printf("Mouse look trace: frame %u dx %.1f dy %.1f target %.2f shown %.2f curve %.4f pitch %.2f\n", frame,
+                   dx, dy, target, shown, *(const float *)(camera + 0x380),
+                   asinf(forward_y < -1.0f ? -1.0f : forward_y > 1.0f ? 1.0f : forward_y) * 57.29578f);
+            /* while the two differ, the unit xz vectors in the camera whose heading is the shown
+             * one (or opposite): the smoothed direction */
+            const float lag = wrap_degrees(target + 180.0f - shown);
+            if (fabsf(lag) > 8.0f) {
+                char found[512] = "";
+                size_t n = 0;
+                for (unsigned off = 0; off + 12 <= 0x2000 && n < sizeof(found) - 32; off += 4) {
+                    const float *v = (const float *)(camera + off);
+                    const float len = v[0] * v[0] + v[2] * v[2];
+                    if (!(fabsf(len - 1.0f) < 0.02f) || !(fabsf(v[1]) < 0.3f)) continue;
+                    const float h = heading_of(v);
+                    if (fabsf(wrap_degrees(h - shown)) < 1.5f || fabsf(wrap_degrees(h - shown - 180.0f)) < 1.5f)
+                        n += (size_t)snprintf(found + n, sizeof(found) - n, " %#x(%.1f)", off, h);
+                }
+                printf("Mouse look trace: lag %.1f, shown-heading vectors:%s\n", lag, found);
+            }
+        }
     }
     return NULL;
 }
