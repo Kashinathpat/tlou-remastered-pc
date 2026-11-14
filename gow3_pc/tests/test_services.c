@@ -6,9 +6,40 @@
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *nid) { (void)table; (void)count; (void)nid; return 0; }
 int gow3gpu_text_input_begin(const char *text, const char *prompt) { (void)text; (void)prompt; return 0; }
 int gow3gpu_text_input_poll(char *text, uint64_t size) { (void)text; (void)size; return 0; }
-int64_t runtime_file_open(const char *path, int flags, int mode) { (void)path; (void)flags; (void)mode; return -1; }
-int64_t runtime_file_read(int fd, void *buffer, uint64_t size) { (void)fd; (void)buffer; (void)size; return -1; }
+/* A playgo-chunk.dat with three chunks (core, english-sp, german-sp) when test_playgo_dat is set;
+ * of the speech files only english-sp.psarc exists. */
+static unsigned char test_playgo[0x200];
+static int test_playgo_dat;
+int64_t runtime_file_open(const char *path, int flags, int mode) {
+    (void)flags; (void)mode;
+    return test_playgo_dat && !strcmp(path,"/app0/sce_sys/playgo-chunk.dat") ? 3 : -1;
+}
+int64_t runtime_file_read(int fd, void *buffer, uint64_t size) {
+    if (fd!=3) return -1;
+    uint64_t n=size<sizeof(test_playgo) ? size : sizeof(test_playgo);
+    memcpy(buffer,test_playgo,n); return (int64_t)n;
+}
 int64_t runtime_file_close(int fd) { (void)fd; return 0; }
+int64_t runtime_file_stat(const char *path, void *guest_stat) {
+    (void)guest_stat;
+    return !strcmp(path,"/app0/build/ps4/main/sound1/streams/speech/english-sp.psarc") ? 0 : -2;
+}
+static void set_env(const char *name, const char *value) {
+#ifdef _WIN32
+    _putenv_s(name, value ? value : "");
+#else
+    if (value) setenv(name, value, 1); else unsetenv(name);
+#endif
+}
+static void test_playgo_build(void) {
+    static const char labels[]="core\0english-sp\0german-sp\0";
+    uint32_t attrs=0x100, at_labels=0x180, labels_size=sizeof(labels), offsets[3]={0,5,16};
+    test_playgo[10]=3;
+    memcpy(test_playgo+0xc0,&attrs,4); memcpy(test_playgo+0xd0,&at_labels,4); memcpy(test_playgo+0xd4,&labels_size,4);
+    for (int i=0;i<3;++i) memcpy(test_playgo+attrs+32*i+28,&offsets[i],4);
+    memcpy(test_playgo+at_labels,labels,sizeof(labels));
+    test_playgo_dat=1;
+}
 static int choice_next=-1;
 int gow3gpu_choice_begin(const char *title, const char *const *items, const char *const *images, int count, int focus) { (void)title; (void)items; (void)images; (void)focus; return count>0; }
 int gow3gpu_choice_poll(void) { return choice_next; }
@@ -96,6 +127,17 @@ int main(void) {
     assert(playgo_get_todo(handle,untouched,1,&pending)==0 && pending==0 && untouched[0]==1);
     assert(playgo_get_todo(handle,untouched,0,&pending)==PLAYGO_BAD_SIZE);
     assert(playgo_close(handle)==0 && playgo_close(handle)==PLAYGO_BAD_HANDLE && playgo_terminate()==0);
+
+    /* PlayGo: a dub whose speech file is missing is not downloaded; the game then takes English. */
+    test_playgo_build();
+    int8_t loci[3]={-1,-1,-1}; uint16_t three[3]={0,1,2};
+    assert(playgo_init(NULL)==0 && playgo_open(&handle,NULL)==0);
+    assert(playgo_chunk_ids(handle,NULL,0,&pending)==0 && pending==3);
+    assert(playgo_locus(handle,three,3,loci)==0 && loci[0]==3 && loci[1]==3 && loci[2]==0);
+    set_env("GOW3_PLAYGO_ALL_LOCAL","1");
+    assert(playgo_init(NULL)==0 && playgo_locus(handle,three,3,loci)==0 && loci[2]==3);
+    set_env("GOW3_PLAYGO_ALL_LOCAL",NULL);
+    assert(playgo_close(handle)==0 && playgo_terminate()==0);
 
     /* Trophies: none until earned; an earned one is saved, reported back and shown once. */
     snprintf(test_user,sizeof(test_user),"services-test-user-%d",(int)getpid());

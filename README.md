@@ -190,6 +190,23 @@ setting the game loads (per weapon and difficulty) gets its four assist lists em
 game's own `no-aim-assist` setting: the crosshair is not helped to follow enemies, and each weapon
 keeps its speeds, zoom and stick curves.
 
+**Languages:** the game's language menus offer all 21 of its languages, not only the four of the
+Americas release (`TLOU_ALL_LANGUAGES=0` keeps those four): English, French, Italian, German,
+Spanish (Spain and Latin America), Portuguese (Portugal and Brazil), Dutch, Danish, Finnish,
+Norwegian, Swedish, Polish, Russian, Czech, Greek, Turkish, Japanese, Korean and Chinese
+(traditional). The executable is the same in every region and picks the region's languages from a
+table; the menus and subtitles of all of them are already in the Americas files. The launcher's
+Game language is the PS4 system language the game sees (`system_language` in tlou.ini;
+`GOW3_LANGUAGE`, a PS4 language id): the game starts in it, and offers Korean and Chinese only when
+it is one of those. Spoken dialogue in German, Italian, Spanish (Spain), Portuguese (Portugal),
+Polish, Russian or Japanese needs that dub's files from your copy of another region's release
+(`<language>-sp.psarc`, and `<language>-mp.psarc` for multiplayer, in
+`build/ps4/main/sound1/streams/speech` of the game folder; the update already carries their
+changes). The Dialogue setting of the language menu offers only the dubs whose files are in the
+game or update folder (the game would otherwise ask to download that "language pack"), and
+PlayGo reports the others as not installed, so a save that asks for one gets English
+(`GOW3_PLAYGO_ALL_LOCAL=1` reports every dub as installed, as before).
+
 ## Building
 
 From an MSYS2 **CLANG64** shell:

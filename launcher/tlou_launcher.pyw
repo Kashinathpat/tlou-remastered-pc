@@ -1360,6 +1360,28 @@ INFO_TEXT = {
         "pro_shadows": "太陽や照明の影をPS4 Proと同じく高い解像度で描画します：よりシャープになり、少し重くなります。",
     },
 }
+# The PS4 system language the game sees (system_language in tlou.ini; tools/probe_tlou.py passes it
+# as GOW3_LANGUAGE). The game starts in it and offers Korean and Chinese only with it (issue #156).
+# {id: name}, in the game's own language names; English (US) is the default.
+SYSTEM_LANGUAGES = {"1": "English", "2": "Français", "3": "Español (España)", "20": "Español (Latinoamérica)",
+                    "4": "Deutsch", "5": "Italiano", "6": "Nederlands", "7": "Português (Portugal)",
+                    "17": "Português (Brasil)", "8": "Русский", "16": "Polski", "0": "日本語", "9": "한국어",
+                    "10": "中文 (繁體)", "12": "Suomi", "13": "Svenska", "14": "Dansk", "15": "Norsk",
+                    "19": "Türkçe", "23": "Čeština", "25": "Ελληνικά"}
+SYSTEM_LANGUAGE_TEXT = {
+    "pt": ("Idioma do jogo", "O idioma em que o jogo começa; depois ele pode ser trocado no menu do jogo. Coreano e chinês só aparecem no menu com eles escolhidos aqui. Dublagens além de inglês, francês, espanhol latino e português do Brasil precisam do arquivo <idioma>-sp.psarc da versão de outra região em build/ps4/main/sound1/streams/speech; sem ele essa dublagem não aparece em Diálogo."),
+    "en": ("Game language", "The language the game starts in; it can then be changed in the game's menu. Korean and Chinese appear in the menu only when chosen here. Dubs other than English, French, Latin American Spanish and Brazilian Portuguese need the <language>-sp.psarc file of another region's release in build/ps4/main/sound1/streams/speech; without it that dub is not offered under Dialogue."),
+    "es": ("Idioma del juego", "El idioma en que empieza el juego; después se puede cambiar en el menú del juego. El coreano y el chino solo aparecen en el menú si se eligen aquí. Los doblajes distintos de inglés, francés, español latino y portugués de Brasil necesitan el archivo <idioma>-sp.psarc de la versión de otra región en build/ps4/main/sound1/streams/speech; sin él ese doblaje no aparece en Diálogo."),
+    "fr": ("Langue du jeu", "La langue dans laquelle le jeu démarre ; elle peut ensuite être changée dans le menu du jeu. Le coréen et le chinois n'apparaissent dans le menu que s'ils sont choisis ici. Les doublages autres que l'anglais, le français, l'espagnol d'Amérique latine et le portugais du Brésil demandent le fichier <langue>-sp.psarc de la version d'une autre région dans build/ps4/main/sound1/streams/speech ; sans lui ce doublage n'est pas proposé dans Dialogue."),
+    "de": ("Spielsprache", "Die Sprache, in der das Spiel startet; danach lässt sie sich im Spielmenü ändern. Koreanisch und Chinesisch erscheinen im Menü nur, wenn sie hier gewählt sind. Synchronisationen außer Englisch, Französisch, lateinamerikanischem Spanisch und brasilianischem Portugiesisch brauchen die Datei <sprache>-sp.psarc der Version einer anderen Region in build/ps4/main/sound1/streams/speech; ohne sie wird diese Synchronisation unter Dialog nicht angeboten."),
+    "it": ("Lingua del gioco", "La lingua in cui parte il gioco; poi si può cambiare nel menu del gioco. Coreano e cinese compaiono nel menu solo se scelti qui. I doppiaggi diversi da inglese, francese, spagnolo latinoamericano e portoghese brasiliano richiedono il file <lingua>-sp.psarc della versione di un'altra regione in build/ps4/main/sound1/streams/speech; senza, quel doppiaggio non compare in Dialogo."),
+    "pl": ("Język gry", "Język, w którym gra się uruchamia; potem można go zmienić w menu gry. Koreański i chiński pojawiają się w menu tylko wtedy, gdy wybrano je tutaj. Dubbingi inne niż angielski, francuski, hiszpański latynoamerykański i portugalski brazylijski wymagają pliku <język>-sp.psarc z wersji z innego regionu w build/ps4/main/sound1/streams/speech; bez niego ten dubbing nie pojawia się w Dialogach."),
+    "ru": ("Язык игры", "Язык, на котором запускается игра; потом его можно сменить в меню игры. Корейский и китайский появляются в меню, только если выбраны здесь. Озвучки, кроме английской, французской, латиноамериканской испанской и бразильской португальской, требуют файла <язык>-sp.psarc из версии другого региона в build/ps4/main/sound1/streams/speech; без него эта озвучка не появляется в пункте «Диалоги»."),
+    "ja": ("ゲームの言語", "ゲームが起動する言語です。あとでゲームのメニューから変更できます。韓国語と中国語は、ここで選んだときだけメニューに表示されます。英語、フランス語、中南米スペイン語、ブラジルポルトガル語以外の音声には、他の地域版の <言語>-sp.psarc を build/ps4/main/sound1/streams/speech に置く必要があります。ない場合、その音声は「会話」に表示されません。"),
+}
+for _code, (_label, _info) in SYSTEM_LANGUAGE_TEXT.items():
+    TEXTS[_code]["system_language"] = _label
+    INFO_TEXT.setdefault(_code, {})["system_language"] = _info
 # Updates from the GitHub releases (launcher/updater.py): {} is the version, then the size in MB.
 UPDATE_KEYS = "update_button update_available update_confirm update_downloading update_installing update_failed update_close_game".split()
 UPDATE_TABLE = {
@@ -2107,7 +2129,12 @@ class Launcher(tk.Tk):
         self.ui_labels = {name: code for code, name in UI_LANGUAGES.items()}
         self.ui_language = self.choice(panel, row, self.t("ui_language"), list(self.ui_labels),
                                        UI_LANGUAGES[self.language], self.change_language)
-        row = self.section(panel, row + 1, self.t("video"))
+        self.system_labels = {name: code for code, name in SYSTEM_LANGUAGES.items()}
+        system = ini.get("system_language", "1")
+        self.system_language = self.choice(panel, row + 1, self.t("system_language"), list(self.system_labels),
+                                           SYSTEM_LANGUAGES.get(system, SYSTEM_LANGUAGES["1"]))
+        self.info(panel, row + 1, "system_language")
+        row = self.section(panel, row + 2, self.t("video"))
         self.display_labels = self.labels(DISPLAY)
         self.display = self.choice(panel, row, self.t("display"), list(self.display_labels),
                                    key_for(self.display_labels, ini.get("display_mode"), self.t("borderless")))
@@ -2265,7 +2292,8 @@ class Launcher(tk.Tk):
         write_ini({"display_mode": self.display_labels[self.display.get()], "output_res": self.resolution.get(),
                    "fps_limit": self.fps.get(), "upscaler": self.upscaler_labels[self.upscaler.get()],
                    "preset": self.preset_labels[self.preset.get()], "vsync": int(self.vsync.get()),
-                   "show_fps": int(self.show_fps.get())})
+                   "show_fps": int(self.show_fps.get()),
+                   "system_language": self.system_labels[self.system_language.get()]})
         SWITCHES.write_text(json.dumps({**self.switches(), "ui_language": self.language, "folders": self.folders,
                                         "overrides": self.overrides},
                                        indent=2) + "\n", encoding="utf-8")

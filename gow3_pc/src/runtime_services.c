@@ -812,18 +812,62 @@ static ABI int32_t trophy_release(int32_t id) { return id>0 ? 0 : TROPHY_INVALID
 /* ---- PlayGo: fully installed package ---- */
 static int playgo_handle, playgo_chunks=-1;
 static uint64_t playgo_language_mask;
+/* Chunks whose data is not there. The Americas package lists a chunk for each of the 11 dubs
+ * (<language>-sp / <language>-mp, the file build/ps4/main/sound1/streams/speech/<label>.psarc)
+ * but ships four of them; the other regions' files can be added. Before it uses a dub the game
+ * asks PlayGo whether that chunk is local and takes English when not (languagemanager.cpp,
+ * FindPlayGoAvailableLanguage, 1.11 at 0xbe9b20), so a dub without its file is reported as
+ * not downloaded. GOW3_PLAYGO_ALL_LOCAL=1: every chunk local, as before. */
+#define PLAYGO_MAX_CHUNKS 1000
+static unsigned char playgo_absent[PLAYGO_MAX_CHUNKS];
+static int speech_chunk(const char *label) {
+    size_t n=strlen(label);
+    return n>3 && n<64 && (!strcmp(label+n-3,"-sp") || !strcmp(label+n-3,"-mp")) && !strchr(label,'/');
+}
+/* playgo-chunk.dat: chunk count (u16) at 10; {offset, size} of the chunk attributes at 0xc0 and of
+ * their labels at 0xd0; a 32-byte attribute has the label's offset (u32) at +28. */
+static void playgo_find_absent(const unsigned char *dat,size_t size) {
+    if (getenv("GOW3_PLAYGO_ALL_LOCAL") && !strcmp(getenv("GOW3_PLAYGO_ALL_LOCAL"),"1")) return;
+    if (size<0xd8) return;
+    uint32_t attrs,labels,labels_size;
+    memcpy(&attrs,dat+0xc0,4); memcpy(&labels,dat+0xd0,4); memcpy(&labels_size,dat+0xd4,4);
+    if (labels>size || labels_size>size-labels) return;
+    char present[512]="", absent[512]="";
+    for (int i=0;i<playgo_chunks;++i) {
+        uint32_t at=attrs+32u*(uint32_t)i, label_offset;
+        if (at>size || size-at<32) break;
+        memcpy(&label_offset,dat+at+28,4);
+        if (label_offset>=labels_size) continue;
+        const char *label=(const char *)dat+labels+label_offset;
+        if (!memchr(label,0,labels_size-label_offset) || !speech_chunk(label)) continue;
+        char path[128]; uint64_t stat[16];
+        snprintf(path,sizeof(path),"/app0/build/ps4/main/sound1/streams/speech/%s.psarc",label);
+        int missing=runtime_file_stat(path,stat)<0;
+        playgo_absent[i]=(unsigned char)missing;
+        char *list=missing ? absent : present;
+        size_t used=strlen(list);
+        snprintf(list+used,512-used,"%s%s",used ? " " : "",label);
+    }
+    printf("Runtime: PlayGo dubs on disk: %s\n",present[0] ? present : "none");
+    if (absent[0]) printf("Runtime: PlayGo dubs not on disk (reported not downloaded): %s\n",absent);
+}
 static ABI int32_t playgo_init(const void *params) {
     (void)params;
     int fd=(int)runtime_file_open("/app0/sce_sys/playgo-chunk.dat",0,0);
-    unsigned char header[12];
+    static unsigned char dat[65536];
+    int64_t size=0;
     playgo_chunks=1;
+    memset(playgo_absent,0,sizeof(playgo_absent));
     int lang=language();
     __atomic_store_n(&playgo_language_mask,lang>=0 && lang<48 ? UINT64_C(1)<<(63-lang) : 0,__ATOMIC_RELAXED);
     if (fd>=0) {
-        if (runtime_file_read(fd,header,sizeof(header))==sizeof(header)) playgo_chunks=header[10]|header[11]<<8;
+        size=runtime_file_read(fd,dat,sizeof(dat));
+        if (size>=12) playgo_chunks=dat[10]|dat[11]<<8;
+        if (playgo_chunks>PLAYGO_MAX_CHUNKS) playgo_chunks=PLAYGO_MAX_CHUNKS;
         runtime_file_close(fd);
     }
-    printf("Runtime: PlayGo initialized; %d chunks, all installed locally\n",playgo_chunks);
+    printf("Runtime: PlayGo initialized; %d chunks installed locally\n",playgo_chunks);
+    if (size>0) playgo_find_absent(dat,(size_t)size);
     return 0;
 }
 static ABI int32_t playgo_open(int32_t *handle,const void *param) {
@@ -846,7 +890,7 @@ static ABI int32_t playgo_locus(int32_t handle,const uint16_t *ids,uint32_t coun
     if (!count) return PLAYGO_BAD_SIZE;
     for (uint32_t i=0;i<count;++i) {
         if (ids[i]>=playgo_chunks) return PLAYGO_BAD_CHUNK;
-        loci[i]=3; /* LocalFast */
+        loci[i]=playgo_absent[ids[i]] ? 0 : 3; /* NotDownloaded / LocalFast */
     }
     return 0;
 }

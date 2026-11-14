@@ -133,6 +133,36 @@ CHEATS = {
 # spinning (pause at 0xC87D65). The flag is treated as on in the worker loop, its re-check before
 # waiting and the submit path, as in the Uncharted ports of the same engine.
 JOB_SLEEP = [(0xC87D63, "7304", "EB04"), (0xC87D96, "741B", "9090"), (0xC873E1, "742D", "9090")]
+# Every language in the game's menus (issue #156; TLOU_ALL_LANGUAGES=0 keeps the Americas set). The
+# executable holds one product config per regional release (product-config.cpp, registered at
+# 0x41340) and picks it by USER_DEFINED_PARAM_1 of param.sfo (552 here). Its language mask (+0x1b0)
+# is English, French, Latin American Spanish and Brazilian Portuguese for CUSA00552; bits 0-20 are
+# the game's 21 languages (languagemanager.cpp table at 0xbe8b40). The text of all of them is in
+# core.psarc and patch.psarc. A dub (German, Italian, Spanish, Portuguese, Polish, Russian,
+# Japanese) needs the other region's <language>-sp/-mp.psarc in sound1/streams/speech; without it
+# the runtime's PlayGo reports that chunk as not downloaded and the game speaks English. Korean
+# and Chinese are offered only with that system language (GOW3_LANGUAGE 9, 10 or 11).
+ALL_LANGUAGES = [(0x1518720, "03000300", "FFFF1F00")]
+# The dialogue languages of the menu (languagemanager, 0xbe98e4..): one `cmp byte [rdx+X], 0; je`
+# per dub adds it to the list when its language is on. A dub whose speech file is in neither the
+# game nor the update folder is left out (the je becomes a jmp), so the menu does not offer it: the
+# game would ask to download that "language pack" and never get it. {speech name: je address}.
+DUB_CHECKS = {"french": 0xBE98EB, "italian": 0xBE990F, "german": 0xBE9933, "spanish": 0xBE9957,
+              "portuguese": 0xBE997B, "japanese": 0xBE999F, "russian": 0xBE99C3, "polish": 0xBE99E7,
+              "sam-spanish": 0xBE9A0B, "brazilian": 0xBE9A2F}
+
+
+def missing_dubs_patch(folders):
+    """Leaves the dubs without a <name>-sp.psarc or <name>-mp.psarc in sound1/streams/speech of any
+    of these folders out of the dialogue menu; returns (changes, names left out)."""
+    speech = [Path(f) / "build/ps4/main/sound1/streams/speech" for f in folders if f]
+    missing = [name for name in DUB_CHECKS
+               if not any((d / f"{name}-{kind}.psarc").is_file() for d in speech for kind in ("sp", "mp"))]
+    return [(DUB_CHECKS[name], "741B", "EB1B") for name in missing], missing
+# The launcher's "System language" (system_language in tlou.ini): the PS4 system language the game
+# starts in, by its id.
+SYSTEM_LANGUAGES = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+                    "16", "17", "18", "19", "20", "22", "23", "25"}
 
 
 def aim_assist_off_patch():
@@ -600,6 +630,18 @@ def main():
         patches["pro-shadows"] = PRO_SHADOWS
     if os.environ.get("TLOU_AMBIENT_SHADOWS") != "quarter":
         patches["ambient-shadows-half"] = AMBIENT_SHADOWS_HALF
+    if os.environ.get("TLOU_ALL_LANGUAGES") != "0":
+        patches["all-languages"] = ALL_LANGUAGES
+        dubs, missing = missing_dubs_patch([game, update])
+        if dubs:
+            patches["dubs without files hidden"] = dubs
+            print(f"Languages: dubs not in the game folder, left out of the dialogue menu: {', '.join(missing)}")
+    # GOW3_LANGUAGE set outside wins over the launcher's choice.
+    system_language = (ini_value(Path(env["GOW3_CONFIG"]), "system_language") or "").strip()
+    if system_language in SYSTEM_LANGUAGES:
+        env.setdefault("GOW3_LANGUAGE", system_language)
+    elif system_language:
+        print(f"Language: system_language '{system_language}' is not a PS4 system language id")
     # The launcher's Controls > Aim assist (aim_assist in tlou.ini; TLOU_AIM_ASSIST=0/1 wins).
     aim_assist = os.environ.get("TLOU_AIM_ASSIST") or ini_value(Path(env["GOW3_CONFIG"]), "aim_assist")
     if (aim_assist or "1").strip() == "0":
